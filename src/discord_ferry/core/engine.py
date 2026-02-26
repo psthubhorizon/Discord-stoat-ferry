@@ -1,22 +1,170 @@
 """Migration orchestrator — shared by CLI and GUI."""
 
-from collections.abc import Callable
+from __future__ import annotations
+
+from collections.abc import Callable, Coroutine
+from datetime import datetime, timezone
 from typing import Any
 
 from discord_ferry.config import FerryConfig
-from discord_ferry.core.events import MigrationEvent
+from discord_ferry.core.events import EventCallback, MigrationEvent
+from discord_ferry.errors import MigrationError
+from discord_ferry.parser.dce_parser import parse_export_directory, validate_export
+from discord_ferry.parser.models import DCEExport
+from discord_ferry.reporter import generate_report
+from discord_ferry.state import MigrationState, load_state, save_state
+
+PhaseFunction = Callable[
+    [FerryConfig, MigrationState, list[DCEExport], EventCallback],
+    Coroutine[Any, Any, None],
+]
+
+PHASE_ORDER: list[str] = [
+    "validate",  # Phase 1 — handled inline (parser)
+    "connect",  # Phase 2
+    "server",  # Phase 3
+    "roles",  # Phase 4
+    "categories",  # Phase 5
+    "channels",  # Phase 6
+    "emoji",  # Phase 7
+    "messages",  # Phase 8
+    "reactions",  # Phase 9
+    "pins",  # Phase 10
+    "report",  # Phase 11 — handled inline (reporter)
+]
+
+# Phases that can be skipped via config flags
+_SKIPPABLE: dict[str, str] = {
+    "emoji": "skip_emoji",
+    "messages": "skip_messages",
+    "reactions": "skip_reactions",
+}
 
 
 async def run_migration(
     config: FerryConfig,
-    on_event: Callable[[MigrationEvent], Any],
-) -> None:
+    on_event: EventCallback,
+    phase_overrides: dict[str, PhaseFunction] | None = None,
+) -> MigrationState:
     """Run the full 11-phase migration.
 
     Args:
         config: Migration configuration.
         on_event: Callback for progress events. GUI subscribes to update UI,
                   CLI subscribes to print Rich output.
+        phase_overrides: Optional dict mapping phase name to a phase function. Used by
+                         tests to inject mock implementations. In production, the engine
+                         will use real phase implementations once they are available.
+
+    Returns:
+        Final MigrationState after all phases complete.
+
+    Raises:
+        MigrationError: If any phase raises an exception.
     """
-    # TODO: implement 11-phase migration
-    raise NotImplementedError
+    config.output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Load or create state
+    if config.resume:
+        state = load_state(config.output_dir)
+    else:
+        state = MigrationState()
+        state.started_at = datetime.now(timezone.utc).isoformat()
+
+    # Phase 1: VALIDATE — parse exports inline
+    on_event(MigrationEvent(phase="validate", status="started", message="Parsing exports..."))
+    exports = parse_export_directory(config.export_dir)
+    warnings = validate_export(exports, config.export_dir)
+    for w in warnings:
+        state.warnings.append(w)
+        on_event(MigrationEvent(phase="validate", status="warning", message=w["message"]))
+
+    # Build author_names from exports (prefer nickname over name)
+    for export in exports:
+        for msg in export.messages:
+            author = msg.author
+            if author.id not in state.author_names:
+                state.author_names[author.id] = author.nickname or author.name
+
+    total_messages = sum(e.message_count for e in exports)
+    on_event(
+        MigrationEvent(
+            phase="validate",
+            status="completed",
+            message=f"Parsed {len(exports)} exports, {total_messages} messages",
+            total=total_messages,
+        )
+    )
+
+    # Phases 2-10: run in order, skipping as appropriate
+    runnable_phases = PHASE_ORDER[1:-1]  # exclude validate and report
+
+    for phase_name in runnable_phases:
+        # Check config skip flags
+        skip_attr = _SKIPPABLE.get(phase_name)
+        if skip_attr and getattr(config, skip_attr, False):
+            on_event(
+                MigrationEvent(phase=phase_name, status="skipped", message="Skipped by config")
+            )
+            continue
+
+        # Check resume: skip phases that precede current_phase
+        if config.resume and state.current_phase:
+            phase_idx = PHASE_ORDER.index(phase_name)
+            current_idx = PHASE_ORDER.index(state.current_phase)
+            if phase_idx < current_idx:
+                on_event(
+                    MigrationEvent(
+                        phase=phase_name,
+                        status="skipped",
+                        message="Already completed (resume)",
+                    )
+                )
+                continue
+
+        # Resolve phase function
+        phase_fn: PhaseFunction | None = None
+        if phase_overrides and phase_name in phase_overrides:
+            phase_fn = phase_overrides[phase_name]
+        # Real implementations will be wired here once available
+
+        if phase_fn is None:
+            on_event(
+                MigrationEvent(phase=phase_name, status="skipped", message="Not yet implemented")
+            )
+            continue
+
+        state.current_phase = phase_name
+        on_event(
+            MigrationEvent(phase=phase_name, status="started", message=f"Starting {phase_name}")
+        )
+
+        try:
+            await phase_fn(config, state, exports, on_event)
+        except Exception as e:
+            state.errors.append({"phase": phase_name, "error": str(e)})
+            save_state(state, config.output_dir)
+            on_event(
+                MigrationEvent(
+                    phase=phase_name,
+                    status="error",
+                    message=f"Error in {phase_name}: {e}",
+                    detail={"error": str(e)},
+                )
+            )
+            raise MigrationError(f"Phase {phase_name} failed: {e}") from e
+
+        on_event(
+            MigrationEvent(phase=phase_name, status="completed", message=f"Completed {phase_name}")
+        )
+        save_state(state, config.output_dir)
+
+    # Phase 11: REPORT — generate and save inline
+    state.current_phase = "report"
+    on_event(MigrationEvent(phase="report", status="started", message="Generating report..."))
+    generate_report(config, state, exports)
+    state.completed_at = datetime.now(timezone.utc).isoformat()
+    save_state(state, config.output_dir)
+    on_event(MigrationEvent(phase="report", status="completed", message="Migration complete"))
+
+    return state

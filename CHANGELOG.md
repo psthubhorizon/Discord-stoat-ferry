@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.3.0] — 2026-02-26
+
+### Added
+
+- **Migration engine** (`core/engine.py`): 11-phase orchestrator with phase injection for testing, resume support (skip completed phases), and config-based skip flags for emoji/messages/reactions
+- **State persistence** (`state.py`): atomic save/load with JSON round-tripping, crash recovery (state saved on error), author name tracking, counter fields for reactions/pins/attachments
+- **Report generator** (`reporter.py`): produces `migration_report.json` per brief §12 with summary counts, ID maps, timing, warnings, and errors
+- **Event callback** (`core/events.py`): `EventCallback` type alias and `"skipped"` status for phase events
+- **40 new tests** across engine (18), reporter (15), and state (7) — 111 total passing
+
 ## [0.2.0] — 2026-02-26
 
 ### Added
