@@ -10,6 +10,10 @@ from discord_ferry.config import FerryConfig
 from discord_ferry.core.events import EventCallback, MigrationEvent
 from discord_ferry.errors import MigrationError
 from discord_ferry.migrator.connect import run_connect
+from discord_ferry.migrator.emoji import run_emoji
+from discord_ferry.migrator.messages import run_messages
+from discord_ferry.migrator.pins import run_pins
+from discord_ferry.migrator.reactions import run_reactions
 from discord_ferry.migrator.structure import run_categories, run_channels, run_roles, run_server
 from discord_ferry.parser.dce_parser import parse_export_directory, validate_export
 from discord_ferry.parser.models import DCEExport
@@ -49,6 +53,10 @@ _DEFAULT_PHASES: dict[str, PhaseFunction] = {
     "roles": run_roles,
     "categories": run_categories,
     "channels": run_channels,
+    "emoji": run_emoji,
+    "messages": run_messages,
+    "reactions": run_reactions,
+    "pins": run_pins,
 }
 
 

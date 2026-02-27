@@ -8,14 +8,18 @@ from aioresponses import aioresponses
 
 from discord_ferry.errors import MigrationError
 from discord_ferry.migrator.api import (
+    api_add_reaction,
     api_create_category,
     api_create_channel,
+    api_create_emoji,
     api_create_role,
     api_create_server,
     api_edit_category,
     api_edit_role,
     api_edit_server,
     api_fetch_server,
+    api_pin_message,
+    api_send_message,
 )
 
 BASE_URL = "https://api.test"
@@ -182,6 +186,121 @@ async def test_api_error_403(mock_aiohttp: aioresponses) -> None:
     async with aiohttp.ClientSession() as session:
         with pytest.raises(MigrationError, match="API error 403"):
             await api_fetch_server(session, BASE_URL, TOKEN, "srv1")
+
+
+# ---------------------------------------------------------------------------
+# api_create_emoji
+# ---------------------------------------------------------------------------
+
+
+async def test_api_create_emoji(mock_aiohttp: aioresponses) -> None:
+    """POST /servers/srv1/emojis sends name and parent (Autumn ID) in the body."""
+    mock_aiohttp.post(
+        f"{BASE_URL}/servers/srv1/emojis",
+        payload={"_id": "emoji42", "name": "party", "parent": "autumn123"},
+        status=200,
+    )
+    async with aiohttp.ClientSession() as session:
+        result = await api_create_emoji(session, BASE_URL, TOKEN, "srv1", "party", "autumn123")
+    assert result["_id"] == "emoji42"
+    assert result["name"] == "party"
+    assert result["parent"] == "autumn123"
+
+
+# ---------------------------------------------------------------------------
+# api_send_message
+# ---------------------------------------------------------------------------
+
+
+async def test_api_send_message(mock_aiohttp: aioresponses) -> None:
+    """POST /channels/ch1/messages sends content, nonce, and excludes None fields."""
+    mock_aiohttp.post(
+        f"{BASE_URL}/channels/ch1/messages",
+        payload={"_id": "msg99", "content": "Hello"},
+        status=200,
+    )
+    async with aiohttp.ClientSession() as session:
+        result = await api_send_message(
+            session,
+            BASE_URL,
+            TOKEN,
+            "ch1",
+            content="Hello",
+            nonce="ferry-discord123",
+        )
+    assert result["_id"] == "msg99"
+    assert result["content"] == "Hello"
+
+
+async def test_api_send_message_excludes_none_fields(mock_aiohttp: aioresponses) -> None:
+    """api_send_message does not include None-valued optional fields in the request body."""
+    captured_body: dict[str, object] = {}
+
+    def capture_callback(url: object, **kwargs: object) -> None:
+        body = kwargs.get("json") or {}
+        captured_body.update(body)  # type: ignore[arg-type]
+
+    mock_aiohttp.post(
+        f"{BASE_URL}/channels/ch1/messages",
+        payload={"_id": "msg1"},
+        callback=capture_callback,
+    )
+    async with aiohttp.ClientSession() as session:
+        await api_send_message(session, BASE_URL, TOKEN, "ch1", content="Hi")
+
+    assert "content" in captured_body
+    assert "attachments" not in captured_body
+    assert "embeds" not in captured_body
+    assert "masquerade" not in captured_body
+    assert "replies" not in captured_body
+
+
+# ---------------------------------------------------------------------------
+# api_add_reaction
+# ---------------------------------------------------------------------------
+
+
+async def test_api_add_reaction(mock_aiohttp: aioresponses) -> None:
+    """PUT /channels/ch1/messages/msg1/reactions/:emoji returns empty dict on 204."""
+    mock_aiohttp.put(
+        f"{BASE_URL}/channels/ch1/messages/msg1/reactions/%F0%9F%91%8D",
+        status=204,
+    )
+    async with aiohttp.ClientSession() as session:
+        result = await api_add_reaction(session, BASE_URL, TOKEN, "ch1", "msg1", "\U0001f44d")
+    assert result == {}
+
+
+async def test_api_add_reaction_custom_emoji(mock_aiohttp: aioresponses) -> None:
+    """PUT with a custom emoji ID (no URL encoding needed for plain ASCII)."""
+    mock_aiohttp.put(
+        f"{BASE_URL}/channels/ch1/messages/msg1/reactions/customEmojiId",
+        status=204,
+    )
+    async with aiohttp.ClientSession() as session:
+        result = await api_add_reaction(session, BASE_URL, TOKEN, "ch1", "msg1", "customEmojiId")
+    assert result == {}
+
+
+# ---------------------------------------------------------------------------
+# api_pin_message
+# ---------------------------------------------------------------------------
+
+
+async def test_api_pin_message(mock_aiohttp: aioresponses) -> None:
+    """PUT /channels/ch1/messages/msg1/pin returns empty dict on 204."""
+    mock_aiohttp.put(
+        f"{BASE_URL}/channels/ch1/messages/msg1/pin",
+        status=204,
+    )
+    async with aiohttp.ClientSession() as session:
+        result = await api_pin_message(session, BASE_URL, TOKEN, "ch1", "msg1")
+    assert result == {}
+
+
+# ---------------------------------------------------------------------------
+# Error and retry tests
+# ---------------------------------------------------------------------------
 
 
 async def test_api_429_retry(mock_aiohttp: aioresponses) -> None:

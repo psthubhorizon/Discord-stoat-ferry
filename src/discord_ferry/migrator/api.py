@@ -273,3 +273,129 @@ async def api_create_channel(
     if description is not None:
         data["description"] = description
     return await _api_request(session, "POST", url, token, data)
+
+
+async def api_create_emoji(
+    session: aiohttp.ClientSession,
+    stoat_url: str,
+    token: str,
+    server_id: str,
+    name: str,
+    parent: str,
+) -> dict[str, Any]:
+    """Create a custom emoji on a server.
+
+    Args:
+        session: An active aiohttp ClientSession.
+        stoat_url: Stoat API base URL.
+        token: Stoat session token.
+        server_id: Target server ID.
+        name: Display name for the emoji (without colons).
+        parent: Autumn file ID of the uploaded emoji image.
+
+    Returns:
+        Emoji object dict from the API (includes ``_id``).
+    """
+    url = f"{stoat_url.rstrip('/')}/servers/{server_id}/emojis"
+    return await _api_request(session, "POST", url, token, {"name": name, "parent": parent})
+
+
+async def api_send_message(
+    session: aiohttp.ClientSession,
+    stoat_url: str,
+    token: str,
+    channel_id: str,
+    *,
+    content: str | None = None,
+    attachments: list[str] | None = None,
+    embeds: list[dict[str, Any]] | None = None,
+    masquerade: dict[str, str | None] | None = None,
+    replies: list[dict[str, Any]] | None = None,
+    nonce: str | None = None,
+) -> dict[str, Any]:
+    """Send a message to a channel.
+
+    Args:
+        session: An active aiohttp ClientSession.
+        stoat_url: Stoat API base URL.
+        token: Stoat session token.
+        channel_id: Target channel ID.
+        content: Message text content. Optional.
+        attachments: List of Autumn file IDs to attach. Optional.
+        embeds: List of embed dicts. Optional.
+        masquerade: Masquerade dict with name/avatar/colour fields (values may be None). Optional.
+        replies: List of reply reference dicts. Optional.
+        nonce: Deduplication nonce (use ``f"ferry-{discord_msg_id}"``). Optional.
+
+    Returns:
+        Message object dict from the API (includes ``_id``).
+    """
+    url = f"{stoat_url.rstrip('/')}/channels/{channel_id}/messages"
+    data: dict[str, Any] = {}
+    if content is not None:
+        data["content"] = content
+    if attachments is not None:
+        data["attachments"] = attachments
+    if embeds is not None:
+        data["embeds"] = embeds
+    if masquerade is not None:
+        data["masquerade"] = masquerade
+    if replies is not None:
+        data["replies"] = replies
+    if nonce is not None:
+        data["nonce"] = nonce
+    return await _api_request(session, "POST", url, token, data)
+
+
+async def api_add_reaction(
+    session: aiohttp.ClientSession,
+    stoat_url: str,
+    token: str,
+    channel_id: str,
+    message_id: str,
+    emoji: str,
+) -> dict[str, Any]:
+    """Add a reaction to a message.
+
+    Args:
+        session: An active aiohttp ClientSession.
+        stoat_url: Stoat API base URL.
+        token: Stoat session token.
+        channel_id: Channel containing the message.
+        message_id: Target message ID.
+        emoji: Emoji string — Unicode character or custom emoji ID. URL-encoded automatically.
+
+    Returns:
+        Empty dict (API returns 204).
+    """
+    from urllib.parse import quote
+
+    encoded_emoji = quote(emoji, safe="")
+    url = (
+        f"{stoat_url.rstrip('/')}/channels/{channel_id}"
+        f"/messages/{message_id}/reactions/{encoded_emoji}"
+    )
+    return await _api_request(session, "PUT", url, token, None)
+
+
+async def api_pin_message(
+    session: aiohttp.ClientSession,
+    stoat_url: str,
+    token: str,
+    channel_id: str,
+    message_id: str,
+) -> dict[str, Any]:
+    """Pin a message in a channel.
+
+    Args:
+        session: An active aiohttp ClientSession.
+        stoat_url: Stoat API base URL.
+        token: Stoat session token.
+        channel_id: Channel containing the message.
+        message_id: Target message ID.
+
+    Returns:
+        Empty dict (API returns 204).
+    """
+    url = f"{stoat_url.rstrip('/')}/channels/{channel_id}/messages/{message_id}/pin"
+    return await _api_request(session, "PUT", url, token, None)

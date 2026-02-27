@@ -28,6 +28,10 @@ _NOOP_OVERRIDES: dict[str, PhaseFunction] = {
     "roles": _noop_phase,
     "categories": _noop_phase,
     "channels": _noop_phase,
+    "emoji": _noop_phase,
+    "messages": _noop_phase,
+    "reactions": _noop_phase,
+    "pins": _noop_phase,
 }
 
 
