@@ -3,8 +3,11 @@
 import json
 import logging
 import re
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
+
+import ijson  # type: ignore[import-untyped]
 
 from discord_ferry.parser.models import (
     DCEAttachment,
@@ -26,11 +29,14 @@ _THREE_SEGMENT_RE = re.compile(r"^(.+?) - (.+?) - (.+?) \[(\d+)\]$")
 _TWO_SEGMENT_RE = re.compile(r"^(.+?) - (.+?) \[(\d+)\]$")
 
 
-def parse_export_directory(export_dir: Path) -> list[DCEExport]:
+def parse_export_directory(export_dir: Path, *, metadata_only: bool = False) -> list[DCEExport]:
     """Parse all DCE JSON files in a directory (top-level only).
 
     Args:
         export_dir: Directory containing DCE JSON export files.
+        metadata_only: If True, skip loading messages into memory. The returned
+            DCEExport objects will have an empty ``messages`` list but ``json_path``
+            and ``message_count`` will be set for later streaming.
 
     Returns:
         List of DCEExport objects sorted by channel name, one per valid file.
@@ -39,7 +45,7 @@ def parse_export_directory(export_dir: Path) -> list[DCEExport]:
     exports: list[DCEExport] = []
     for json_path in sorted(export_dir.glob("*.json")):
         try:
-            export = parse_single_export(json_path)
+            export = parse_single_export(json_path, metadata_only=metadata_only)
             exports.append(export)
         except (ValueError, json.JSONDecodeError, KeyError):
             logger.warning("Skipping %s: not a valid DCE export", json_path.name)
@@ -47,11 +53,15 @@ def parse_export_directory(export_dir: Path) -> list[DCEExport]:
     return exports
 
 
-def parse_single_export(json_path: Path) -> DCEExport:
+def parse_single_export(json_path: Path, *, metadata_only: bool = False) -> DCEExport:
     """Parse a single DCE JSON export file.
 
     Args:
         json_path: Path to the DCE JSON export file.
+        metadata_only: If True, skip loading messages into memory. The returned
+            DCEExport will have an empty ``messages`` list but ``json_path`` and
+            ``message_count`` are set so callers can stream later via
+            :func:`stream_messages`.
 
     Returns:
         Parsed DCEExport dataclass.
@@ -70,8 +80,11 @@ def parse_single_export(json_path: Path) -> DCEExport:
     guild = _parse_guild(raw["guild"])
     channel = _parse_channel(raw["channel"])
 
-    messages = [_parse_message(m) for m in raw["messages"]]
-    messages.sort(key=lambda m: m.timestamp)
+    if metadata_only:
+        messages = []
+    else:
+        messages = [_parse_message(m) for m in raw["messages"]]
+        messages.sort(key=lambda m: m.timestamp)
 
     is_thread, parent_channel_name = _infer_thread_info(json_path.stem)
 
@@ -87,12 +100,39 @@ def parse_single_export(json_path: Path) -> DCEExport:
     )
 
 
-def validate_export(exports: list[DCEExport], export_dir: Path) -> list[dict[str, str]]:
+def stream_messages(json_path: Path) -> Iterator[DCEMessage]:
+    """Yield messages one at a time from a DCE JSON file using streaming JSON.
+
+    This avoids loading all messages into memory at once.
+
+    Args:
+        json_path: Path to the DCE JSON export file.
+
+    Yields:
+        Parsed DCEMessage objects in file order.
+    """
+    with open(json_path, "rb") as f:
+        for raw_msg in ijson.items(f, "messages.item"):
+            yield _parse_message(raw_msg)
+
+
+def validate_export(
+    exports: list[DCEExport],
+    export_dir: Path,
+    author_names: dict[str, str] | None = None,
+) -> list[dict[str, str]]:
     """Validate a list of parsed DCE exports and return any warnings.
+
+    When exports were parsed with ``metadata_only=True``, their ``messages`` list
+    is empty but ``json_path`` is set. This function streams messages in a single
+    pass in that case, keeping memory usage low.
 
     Args:
         exports: Parsed exports to validate.
         export_dir: Source directory (used for context in warning messages).
+        author_names: Optional dict to populate with author ID -> display name
+            mappings during the validation scan. This avoids a second full scan
+            of all messages.
 
     Returns:
         List of warning dicts, each with 'type' and 'message' keys.
@@ -104,10 +144,28 @@ def validate_export(exports: list[DCEExport], export_dir: Path) -> list[dict[str
     for export in exports:
         channel_name = export.channel.name
 
-        # Check for rendered markdown (mentions present but no raw <@ syntax in content)
-        # Scan all messages that have mentions, not just first 20
-        for msg in export.messages:
-            if msg.mentions and "<@" not in msg.content and "<#" not in msg.content:
+        # Stream or iterate messages in a single pass for all validation checks.
+        if export.messages:
+            msg_iter = iter(export.messages)
+        elif export.json_path is not None:
+            msg_iter = stream_messages(export.json_path)
+        else:
+            msg_iter = iter([])
+
+        markdown_warned = False
+        http_warned = False
+        has_messages = False
+
+        for msg in msg_iter:
+            has_messages = True
+
+            # Check for rendered markdown (first occurrence only)
+            if (
+                not markdown_warned
+                and msg.mentions
+                and "<@" not in msg.content
+                and "<#" not in msg.content
+            ):
                 warnings.append(
                     {
                         "type": "rendered_markdown",
@@ -117,33 +175,29 @@ def validate_export(exports: list[DCEExport], export_dir: Path) -> list[dict[str
                         ),
                     }
                 )
-                break  # one warning per export is enough
+                markdown_warned = True
 
-        # Check for HTTP attachment URLs (media not downloaded)
-        http_warned = False
-        for msg in export.messages:
-            if http_warned:
-                break
-            for att in msg.attachments:
-                if att.url.startswith("http"):
-                    warnings.append(
-                        {
-                            "type": "http_attachment",
-                            "message": (
-                                f"Channel '{channel_name}': attachment '{att.file_name}' "
-                                f"has an HTTP URL — media was not downloaded locally"
-                            ),
-                        }
-                    )
-                    http_warned = True
-                    break
+            # Check for HTTP attachment URLs (first occurrence only)
+            if not http_warned:
+                for att in msg.attachments:
+                    if att.url.startswith("http"):
+                        warnings.append(
+                            {
+                                "type": "http_attachment",
+                                "message": (
+                                    f"Channel '{channel_name}': attachment '{att.file_name}' "
+                                    f"has an HTTP URL — media was not downloaded locally"
+                                ),
+                            }
+                        )
+                        http_warned = True
+                        break
 
-        # Collect unique non-thread channel IDs
-        if not export.is_thread:
-            unique_channel_ids.add(export.channel.id)
+            # Collect author names (if caller requested)
+            if author_names is not None and msg.author.id not in author_names:
+                author_names[msg.author.id] = msg.author.nickname or msg.author.name
 
-        # Collect custom emoji IDs from reactions and message content
-        for msg in export.messages:
+            # Collect custom emoji IDs from reactions and content
             for reaction in msg.reactions:
                 if reaction.emoji.id:
                     custom_emoji_ids.add(reaction.emoji.id)
@@ -151,8 +205,12 @@ def validate_export(exports: list[DCEExport], export_dir: Path) -> list[dict[str
                 for match in _CONTENT_EMOJI_RE.finditer(msg.content):
                     custom_emoji_ids.add(match.group(1))
 
-        # Check for empty exports
-        if len(export.messages) == 0:
+        # Collect unique non-thread channel IDs
+        if not export.is_thread:
+            unique_channel_ids.add(export.channel.id)
+
+        # Check for empty exports (use message_count if messages were not iterated)
+        if not has_messages and export.message_count == 0:
             warnings.append(
                 {
                     "type": "empty_export",

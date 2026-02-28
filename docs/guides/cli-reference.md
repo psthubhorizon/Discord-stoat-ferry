@@ -51,17 +51,21 @@ ferry validate ~/exports/my-discord-server/
 Run the full migration. Creates or connects to a Stoat server, then imports structure and messages.
 
 ```
-ferry migrate EXPORT_DIR [OPTIONS]
+ferry migrate [OPTIONS]
 ```
 
-`EXPORT_DIR` is the path to your DCE export folder.
+!!! info "Mode selection"
+    Provide either `--discord-token` + `--discord-server` (orchestrated mode) or `--export-dir` (offline mode). You cannot use both.
 
 ### Options
 
 | Flag | Environment Variable | Default | Description |
 |------|----------------------|---------|-------------|
+| `--discord-token TEXT` | `DISCORD_TOKEN` | | Discord user token (orchestrated mode) |
+| `--discord-server TEXT` | `DISCORD_SERVER_ID` | | Discord server ID (orchestrated mode) |
+| `--export-dir PATH` | | | Path to DCE exports (offline mode) |
 | `--stoat-url TEXT` | `STOAT_URL` | *(required)* | Stoat API base URL (e.g. `https://api.stoat.chat`) |
-| `--token TEXT` | `STOAT_TOKEN` | *(required)* | Your Stoat user token |
+| `--token TEXT` | `STOAT_TOKEN` | *(required)* | Your Stoat bot token |
 | `--server-id TEXT` | | | Migrate into an existing Stoat server by ID |
 | `--server-name TEXT` | | | Name for the new server (defaults to the Discord server name) |
 | `--skip-messages` | | false | Import structure only — no messages sent |
@@ -78,15 +82,17 @@ ferry migrate EXPORT_DIR [OPTIONS]
 | `--verbose` / `-v` | | false | Enable debug output (per-message logging) |
 
 !!! warning "Token security"
-    Avoid passing `--token` directly on the command line — it may appear in shell history. Use the `STOAT_TOKEN` environment variable or a `.env` file instead.
+    Avoid passing `--token` or `--discord-token` directly on the command line — they may appear in shell history. Use environment variables or a `.env` file instead.
 
 ### Environment Variables
 
-You can set `STOAT_URL` and `STOAT_TOKEN` in a `.env` file in your working directory. Ferry loads this file automatically.
+You can set credentials in a `.env` file in your working directory. Ferry loads this file automatically.
 
 ```dotenv title=".env"
+DISCORD_TOKEN=your_discord_token_here
+DISCORD_SERVER_ID=123456789012345678
 STOAT_URL=https://api.stoat.chat
-STOAT_TOKEN=your_token_here
+STOAT_TOKEN=your_stoat_token_here
 ```
 
 !!! tip
@@ -105,12 +111,22 @@ STOAT_TOKEN=your_token_here
 You can use these in scripts:
 
 ```bash
-ferry migrate ~/exports/my-server/ && echo "Migration complete!"
+ferry migrate --export-dir ~/exports/my-server/ && echo "Migration complete!"
 ```
 
 ---
 
 ## Examples
+
+**1-Click migration (orchestrated):**
+
+```bash
+ferry migrate \
+  --discord-token "$DISCORD_TOKEN" \
+  --discord-server 123456789012345678 \
+  --stoat-url https://api.stoat.chat \
+  --token "$STOAT_TOKEN"
+```
 
 **Validate an export before migrating:**
 
@@ -118,18 +134,18 @@ ferry migrate ~/exports/my-server/ && echo "Migration complete!"
 ferry validate ~/exports/my-discord-server/
 ```
 
-**Run a full migration using environment variables for credentials:**
+**Run a full offline migration using environment variables for credentials:**
 
 ```bash
 export STOAT_URL=https://api.stoat.chat
 export STOAT_TOKEN=your_token_here
-ferry migrate ~/exports/my-discord-server/
+ferry migrate --export-dir ~/exports/my-discord-server/
 ```
 
 **Migrate into an existing Stoat server:**
 
 ```bash
-ferry migrate ~/exports/my-discord-server/ \
+ferry migrate --export-dir ~/exports/my-discord-server/ \
   --stoat-url https://api.stoat.chat \
   --token your_token_here \
   --server-id 01ABCDEF234567890ABCDEFGH
@@ -138,7 +154,7 @@ ferry migrate ~/exports/my-discord-server/ \
 **Import structure only (no messages), useful for a test run:**
 
 ```bash
-ferry migrate ~/exports/my-discord-server/ \
+ferry migrate --export-dir ~/exports/my-discord-server/ \
   --stoat-url https://api.stoat.chat \
   --token your_token_here \
   --skip-messages \
@@ -149,13 +165,13 @@ ferry migrate ~/exports/my-discord-server/ \
 **Validate the full migration pipeline without making any API calls:**
 
 ```bash
-ferry migrate ./export --stoat-url https://api.stoat.chat --token "$TOKEN" --dry-run
+ferry migrate --export-dir ./export --stoat-url https://api.stoat.chat --token "$TOKEN" --dry-run
 ```
 
 **Resume an interrupted migration:**
 
 ```bash
-ferry migrate ~/exports/my-discord-server/ \
+ferry migrate --export-dir ~/exports/my-discord-server/ \
   --stoat-url https://api.stoat.chat \
   --token your_token_here \
   --resume
@@ -164,7 +180,7 @@ ferry migrate ~/exports/my-discord-server/ \
 **Run with a faster rate (use with caution on the official hosted service):**
 
 ```bash
-ferry migrate ~/exports/my-discord-server/ \
+ferry migrate --export-dir ~/exports/my-discord-server/ \
   --stoat-url https://stoat.example.com \
   --token your_token_here \
   --rate-limit 0.5

@@ -56,6 +56,20 @@ def test_msgs_per_hour_zero() -> None:
     assert _msgs_per_hour(0) == 0
 
 
+def test_step_labels_include_export() -> None:
+    """Step labels include the Export step."""
+    from discord_ferry.gui import _STEP_LABELS
+
+    assert "Export" in _STEP_LABELS
+
+
+def test_phase_labels_include_export() -> None:
+    """Phase labels include the export phase."""
+    from discord_ferry.gui import _PHASE_LABELS
+
+    assert "export" in _PHASE_LABELS
+
+
 def test_compute_summary_with_fixtures() -> None:
     exports = parse_export_directory(FIXTURES_DIR)
     summary = _compute_summary(exports)
@@ -103,6 +117,7 @@ async def test_cancel_event_stops_migration() -> None:
         stoat_url="http://localhost",
         token="test",
         cancel_event=cancel,
+        skip_export=True,
     )
 
     events: list[MigrationEvent] = []
@@ -151,6 +166,7 @@ async def test_cancel_saves_state(tmp_path: Path) -> None:
         token="test",
         cancel_event=cancel,
         output_dir=tmp_path,
+        skip_export=True,
     )
 
     noop: PhaseFunction = _noop_phase  # type: ignore[assignment]

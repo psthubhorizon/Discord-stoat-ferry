@@ -201,7 +201,21 @@ class _ProgressTracker:
 # ---------------------------------------------------------------------------
 
 _common_options = [
-    click.argument("export_dir", type=click.Path(exists=True)),
+    click.option(
+        "--export-dir",
+        type=click.Path(exists=True),
+        default=None,
+        help="Path to DCE exports (offline mode)",
+    ),
+    click.option(
+        "--discord-token",
+        envvar="DISCORD_TOKEN",
+        default=None,
+        help="Discord user token",
+    ),
+    click.option(
+        "--discord-server", envvar="DISCORD_SERVER_ID", default=None, help="Discord server ID"
+    ),
     click.option("--stoat-url", envvar="STOAT_URL", default=None, help="Stoat API base URL"),
     click.option("--token", envvar="STOAT_TOKEN", default=None, help="Stoat user/bot token"),
     click.option("--server-id", default=None, help="Use existing Stoat server"),
@@ -242,8 +256,30 @@ def _add_options(options: list[Any]) -> Callable[[F], F]:
 
 def _build_config(kwargs: dict[str, Any]) -> FerryConfig:
     """Build a FerryConfig from Click kwargs."""
+    export_dir_str = kwargs.get("export_dir")
+    discord_token = kwargs.get("discord_token")
+    discord_server = kwargs.get("discord_server")
+
+    # Mode detection: orchestrated vs offline
+    if export_dir_str and discord_token:
+        raise click.UsageError("Cannot use both --export-dir and --discord-token")
+
+    if export_dir_str:
+        # Offline mode
+        export_dir = Path(export_dir_str)
+        skip_export = True
+    elif discord_token and discord_server:
+        # Orchestrated mode — export_dir will be set to default cache dir
+        export_dir = Path(kwargs.get("output_dir", "./ferry-output")) / "dce_cache" / discord_server
+        skip_export = False
+    else:
+        raise click.UsageError(
+            "Provide either --export-dir (offline mode) or both "
+            "--discord-token and --discord-server (orchestrated mode)"
+        )
+
     return FerryConfig(
-        export_dir=Path(kwargs["export_dir"]),
+        export_dir=export_dir,
         stoat_url=kwargs["stoat_url"],
         token=kwargs["token"],
         server_id=kwargs.get("server_id"),
@@ -260,6 +296,9 @@ def _build_config(kwargs: dict[str, Any]) -> FerryConfig:
         verbose=kwargs.get("verbose", False),
         max_channels=kwargs.get("max_channels", 200),
         max_emoji=kwargs.get("max_emoji", 100),
+        discord_token=discord_token,
+        discord_server_id=discord_server,
+        skip_export=skip_export,
     )
 
 
@@ -286,7 +325,11 @@ def migrate(**kwargs: Any) -> None:
         console.print("[bold red]Error:[/] --token is required (or set STOAT_TOKEN)")
         sys.exit(1)
 
-    config = _build_config(kwargs)
+    try:
+        config = _build_config(kwargs)
+    except click.UsageError as exc:
+        console.print(f"[bold red]Error:[/] {exc}")
+        sys.exit(1)
     tracker = _ProgressTracker(verbose=config.verbose)
 
     console.print("[bold]Discord Ferry[/] — starting migration\n")

@@ -20,6 +20,7 @@ from discord_ferry.migrator.api import (
     api_fetch_server,
     get_session,
 )
+from discord_ferry.parser.dce_parser import stream_messages
 from discord_ferry.uploader.autumn import upload_with_cache
 
 if TYPE_CHECKING:
@@ -242,7 +243,12 @@ async def run_roles(
     seen_ids: set[str] = set()
     unique_roles: list[DCERole] = []
     for export in exports:
-        for msg in export.messages:
+        msg_iter = (
+            stream_messages(export.json_path)
+            if export.json_path is not None
+            else iter(export.messages)
+        )
+        for msg in msg_iter:
             for role in msg.author.roles:
                 if role.id not in seen_ids:
                     seen_ids.add(role.id)

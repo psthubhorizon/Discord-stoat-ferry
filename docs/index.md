@@ -10,11 +10,11 @@ One-click app for Windows and Mac. CLI for Linux. No coding required.
 
 ## Get Started in 3 Steps
 
-1. **[Export your Discord server](getting-started/export-discord.md)** — use DiscordChatExporter to save your server locally
-2. **[Install Ferry and connect to Stoat](getting-started/install.md)** — download the app, enter your Stoat URL and token
-3. **[Run your first migration](getting-started/first-migration.md)** — click Migrate and watch it go
+1. **[Install Ferry](getting-started/install.md)** — download the app for Windows, macOS, or Linux
+2. **[Set up Stoat](getting-started/setup-stoat.md)** — create your destination server and get a bot token
+3. **[Run your first migration](getting-started/first-migration.md)** — enter your Discord and Stoat credentials, click Migrate
 
-New to Stoat? See [Setting up Stoat](getting-started/setup-stoat.md) first.
+Already have DCE exports? See [Offline Migration](getting-started/export-discord.md) to skip the export step.
 
 ---
 

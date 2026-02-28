@@ -371,6 +371,91 @@ def test_dce_export_json_path_defaults_to_none() -> None:
     assert export.json_path is None
 
 
+def test_stream_messages_yields_all(tmp_path: Path) -> None:
+    """stream_messages yields each message from a DCE JSON file."""
+    import json
+
+    from discord_ferry.parser.dce_parser import stream_messages
+
+    data = {
+        "guild": {"id": "1", "name": "G"},
+        "channel": {"id": "2", "type": 0, "name": "c"},
+        "messages": [
+            {
+                "id": "100",
+                "type": "Default",
+                "timestamp": "2024-01-01T00:00:00+00:00",
+                "content": "hello",
+                "author": {"id": "10", "name": "User"},
+            },
+            {
+                "id": "101",
+                "type": "Default",
+                "timestamp": "2024-01-01T00:01:00+00:00",
+                "content": "world",
+                "author": {"id": "10", "name": "User"},
+            },
+        ],
+        "messageCount": 2,
+    }
+    json_path = tmp_path / "test.json"
+    json_path.write_text(json.dumps(data))
+
+    msgs = list(stream_messages(json_path))
+    assert len(msgs) == 2
+    assert msgs[0].id == "100"
+    assert msgs[0].content == "hello"
+    assert msgs[1].id == "101"
+
+
+def test_stream_messages_handles_empty(tmp_path: Path) -> None:
+    """stream_messages yields nothing for exports with no messages."""
+    import json
+
+    from discord_ferry.parser.dce_parser import stream_messages
+
+    data = {
+        "guild": {"id": "1", "name": "G"},
+        "channel": {"id": "2", "type": 0, "name": "c"},
+        "messages": [],
+        "messageCount": 0,
+    }
+    json_path = tmp_path / "test.json"
+    json_path.write_text(json.dumps(data))
+
+    msgs = list(stream_messages(json_path))
+    assert len(msgs) == 0
+
+
+def test_parse_single_export_metadata_only(tmp_path: Path) -> None:
+    """metadata_only=True returns DCEExport with empty messages list."""
+    import json
+
+    from discord_ferry.parser.dce_parser import parse_single_export
+
+    data = {
+        "guild": {"id": "1", "name": "G"},
+        "channel": {"id": "2", "type": 0, "name": "c"},
+        "messages": [
+            {
+                "id": "100",
+                "type": "Default",
+                "timestamp": "2024-01-01T00:00:00+00:00",
+                "content": "hello",
+                "author": {"id": "10", "name": "User"},
+            },
+        ],
+        "messageCount": 1,
+    }
+    json_path = tmp_path / "test.json"
+    json_path.write_text(json.dumps(data))
+
+    export = parse_single_export(json_path, metadata_only=True)
+    assert export.message_count == 1
+    assert len(export.messages) == 0
+    assert export.json_path == json_path
+
+
 def test_validate_counts_emoji_from_content(tmp_path: Path) -> None:
     """validate_export counts custom emoji in message content, not just reactions."""
     temp_dir = tmp_path / "exports"

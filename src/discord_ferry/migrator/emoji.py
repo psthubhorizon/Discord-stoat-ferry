@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 
 from discord_ferry.core.events import MigrationEvent
 from discord_ferry.migrator.api import api_create_emoji, get_session
+from discord_ferry.parser.dce_parser import stream_messages
 from discord_ferry.uploader.autumn import upload_with_cache
 
 if TYPE_CHECKING:
@@ -64,7 +65,12 @@ async def run_emoji(
     discovered: dict[str, dict[str, object]] = {}
 
     for export in exports:
-        for msg in export.messages:
+        msg_iter = (
+            stream_messages(export.json_path)
+            if export.json_path is not None
+            else iter(export.messages)
+        )
+        for msg in msg_iter:
             # Source 1: reactions with a non-empty custom emoji ID.
             for reaction in msg.reactions:
                 emoji = reaction.emoji

@@ -29,6 +29,7 @@ def _make_config(tmp_path: Path, **overrides: object) -> FerryConfig:
         "stoat_url": "https://api.test",
         "token": "test-token",
         "output_dir": tmp_path,
+        "skip_export": True,  # tests use offline mode with fixture exports
     }
     defaults.update(overrides)
     return FerryConfig(**defaults)  # type: ignore[arg-type]
@@ -193,33 +194,44 @@ async def test_max_emoji_limit_emits_warning(tmp_path: Path) -> None:
         """Simulate having more emoji than max_emoji allows."""
         from discord_ferry.migrator.emoji import run_emoji
         from discord_ferry.parser.models import (
+            DCEAuthor,
+            DCEChannel,
             DCEEmoji,
+            DCEExport,
+            DCEGuild,
+            DCEMessage,
             DCEReaction,
         )
 
-        # Inject synthetic emoji into the first export's messages so run_emoji discovers them.
-        if exports:
-            fake_reactions = [
-                DCEReaction(
-                    emoji=DCEEmoji(
-                        id=str(900_000 + i),
-                        name=f"fake_emoji_{i}",
-                        is_animated=False,
-                        image_url="",
-                    ),
-                    count=1,
-                )
-                for i in range(config.max_emoji + 3)
-            ]
-            # Patch the first message to carry these reactions temporarily.
-            original_msgs = exports[0].messages
-            if original_msgs:
-                original_reactions = original_msgs[0].reactions
-                original_msgs[0].reactions = fake_reactions
-                await run_emoji(config, state, exports, emit)
-                original_msgs[0].reactions = original_reactions
-                return
-        await run_emoji(config, state, exports, emit)
+        # Build a synthetic export with a single message carrying more emoji than max_emoji.
+        # This avoids relying on exports[0].messages being non-empty (which metadata_only
+        # mode makes empty).
+        fake_reactions = [
+            DCEReaction(
+                emoji=DCEEmoji(
+                    id=str(900_000 + i),
+                    name=f"fake_emoji_{i}",
+                    is_animated=False,
+                    image_url="",
+                ),
+                count=1,
+            )
+            for i in range(config.max_emoji + 3)
+        ]
+        synthetic_msg = DCEMessage(
+            id="synth-1",
+            type="Default",
+            timestamp="2024-01-01T00:00:00+00:00",
+            content="",
+            author=DCEAuthor(id="u1", name="User"),
+            reactions=fake_reactions,
+        )
+        synthetic_export = DCEExport(
+            guild=DCEGuild(id="1", name="SynthGuild"),
+            channel=DCEChannel(id="2", type=0, name="synth"),
+            messages=[synthetic_msg],
+        )
+        await run_emoji(config, state, [synthetic_export], emit)
 
     overrides: dict[str, PhaseFunction] = {
         **{

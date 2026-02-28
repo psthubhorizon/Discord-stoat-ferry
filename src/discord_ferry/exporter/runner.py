@@ -77,19 +77,23 @@ async def validate_discord_token(token: str) -> None:
     """Validate a Discord user token via the /users/@me endpoint.
 
     Raises:
-        DiscordAuthError: If the token is invalid (401) or API returns unexpected status.
+        DiscordAuthError: If the token is invalid (401), API returns unexpected
+            status, or the network is unreachable.
     """
-    async with (
-        aiohttp.ClientSession() as session,
-        session.get(
-            "https://discord.com/api/v10/users/@me",
-            headers={"Authorization": token},
-        ) as resp,
-    ):
-        if resp.status == 401:
-            raise DiscordAuthError("Invalid Discord token. Check that you copied it correctly.")
-        if resp.status != 200:
-            raise DiscordAuthError(f"Discord API returned unexpected status {resp.status}")
+    try:
+        async with (
+            aiohttp.ClientSession() as session,
+            session.get(
+                "https://discord.com/api/v10/users/@me",
+                headers={"Authorization": token},
+            ) as resp,
+        ):
+            if resp.status == 401:
+                raise DiscordAuthError("Invalid Discord token. Check that you copied it correctly.")
+            if resp.status != 200:
+                raise DiscordAuthError(f"Discord API returned unexpected status {resp.status}")
+    except aiohttp.ClientError as exc:
+        raise DiscordAuthError(f"Cannot reach Discord API: {exc}") from exc
 
 
 async def run_dce_export(
@@ -115,14 +119,6 @@ async def run_dce_export(
 
     cmd = _build_dce_command(config, dce_path)
     config.export_dir.mkdir(parents=True, exist_ok=True)
-
-    on_event(
-        MigrationEvent(
-            phase="export",
-            status="started",
-            message="Starting Discord export...",
-        )
-    )
 
     process = await asyncio.create_subprocess_exec(
         *cmd,
@@ -185,13 +181,5 @@ async def run_dce_export(
     if process.returncode != 0:
         last_err = stderr_lines[-1] if stderr_lines else "Unknown error"
         raise ExportError(f"DCE export failed (exit code {process.returncode}): {last_err}")
-
-    on_event(
-        MigrationEvent(
-            phase="export",
-            status="completed",
-            message="Discord export complete.",
-        )
-    )
 
     return config.export_dir

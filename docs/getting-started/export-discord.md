@@ -1,5 +1,8 @@
 # Export Your Discord Server
 
+!!! tip "Using 1-Click Migration?"
+    If you're using Ferry's 1-Click Migration mode, you don't need to manually run DiscordChatExporter — Ferry handles it automatically. This guide is for **offline mode** only.
+
 This page walks you through exporting your Discord server's content using DiscordChatExporter (DCE).
 The export is the raw material that Discord Ferry uses to migrate your server. If the export is
 missing data or uses the wrong settings, messages, mentions, and attachments will not migrate

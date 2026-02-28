@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any
 
 from discord_ferry.core.events import MigrationEvent
 from discord_ferry.migrator.api import api_send_message, get_session
+from discord_ferry.parser.dce_parser import stream_messages
 from discord_ferry.parser.transforms import (
     convert_spoilers,
     flatten_embed,
@@ -81,7 +82,11 @@ async def run_messages(
     if config.dry_run:
         for export in sorted_exports:
             stoat_ch = state.channel_map.get(export.channel.id, f"dry-ch-{export.channel.id}")
-            for msg_obj in export.messages:
+            if export.json_path is not None:
+                dry_source = stream_messages(export.json_path)
+            else:
+                dry_source = iter(export.messages)
+            for msg_obj in dry_source:
                 if msg_obj.type in _SKIP_TYPES:
                     continue
                 if msg_obj.type == "ChannelPinnedMessage":
@@ -184,11 +189,14 @@ async def run_messages(
                         )
                     )
 
-            # Sort messages oldest-first (ISO 8601 timestamps sort lexicographically).
-            sorted_messages = sorted(export.messages, key=lambda m: m.timestamp)
-            total = len(sorted_messages)
+            # Stream messages from JSON file if available (low memory), else fall back to in-memory.
+            if export.json_path is not None:
+                message_source = stream_messages(export.json_path)
+            else:
+                message_source = iter(sorted(export.messages, key=lambda m: m.timestamp))
+            total = export.message_count
 
-            for idx, msg in enumerate(sorted_messages):
+            for idx, msg in enumerate(message_source):
                 # Resume: skip messages already processed within the resume channel.
                 # Compare as integers — Snowflake IDs are numeric.
                 if (

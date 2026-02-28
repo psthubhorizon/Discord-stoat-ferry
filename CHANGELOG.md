@@ -6,19 +6,38 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.2.0] — 2026-02-28
+
 ### Added
+
+- **Phase 0 — DCE Orchestration**: Ferry can now download and run DiscordChatExporter automatically. Users provide a Discord token and server ID instead of manually exporting. Existing offline mode (`--export-dir`) still works.
+- **Streaming JSON parser**: `stream_messages()` uses ijson to parse messages one at a time, keeping memory usage flat for large exports
+- **`metadata_only` parsing mode**: `parse_export_directory(metadata_only=True)` skips message loading for fast validation
+- **CLI orchestrated mode**: `--discord-token` + `--discord-server` flags for automatic export, mutual exclusion with `--export-dir`
+- **GUI orchestrated mode**: Mode toggle (Orchestrated / Offline), Discord credential inputs, ToS checkbox, `/export` page with progress bar
+- **Single-pass author name collection**: `validate_export()` now collects author names during validation, eliminating a second full scan
+- **New dependency**: `ijson>=3.0` for streaming JSON parsing
+- **49 new tests**: streaming parser, metadata_only, CLI orchestrated mode, GUI phase labels — 355 total passing
+
+### Changed
 
 - **`/brief` skill**: 6-phase requirements crystallization for the design pipeline (`.claude/skills/brief/`)
 - **`/critique` skill**: 7-dimension design review adapted for Discord Ferry constraints (`.claude/skills/critique/`)
 - **PostToolUse hook**: Reminds about verification batching during multi-file edits
 - **SessionStart version display**: Shows current project version on session start
 - **Context7 library ID table**: Known IDs for faster documentation lookups
-
-### Changed
-
 - **Ship skill Step 4**: Uses `get_mistral_opinion` with file-category focus instead of `get_default_opinion`
 - **Ship skill Step 3**: Added "historically skipped" warning and Skill-vs-Task clarification
-- **`effortLevel`**: Set to `high` in settings.json
+- **Engine phases**: Now 12 phases (EXPORT through REPORT); validate uses `metadata_only=True`
+- **All message-consuming phases** (messages, emoji, roles) use `stream_messages()` when exports were parsed with `metadata_only=True`
+- **Runner lifecycle events**: Engine owns started/completed events; runner only emits progress
+- **Discord token security**: GUI clears token from persistent storage in `finally` block (covers failure paths)
+- **`validate_discord_token`**: Now catches `aiohttp.ClientError` for network failures
+- **Documentation rewrite**: 5 docs pages updated to show orchestrated mode as primary workflow
+
+### Fixed
+
+- **mypy webview error**: Added `type: ignore[import-not-found]` for optional `webview` import
 
 ## [1.1.0] — 2026-02-28
 

@@ -46,13 +46,14 @@ Rich progress bars. Neither interface knows anything about how the other renders
 
 ---
 
-## 11 Migration Phases
+## Migration Phases
 
 The engine runs phases in strict order. Each phase is idempotent with respect to state — if interrupted
 and resumed, a completed phase is skipped entirely.
 
 | # | Phase | What it does |
 |---|-------|-------------|
+| 0 | **EXPORT** | Run DiscordChatExporter to export the Discord server (skipped in offline mode) |
 | 1 | **VALIDATE** | Parse all DCE JSON files, verify media was downloaded, detect format issues |
 | 2 | **CONNECT** | Test Stoat API credentials, resolve Autumn upload URL, verify server accessibility (if using `--server-id`) |
 | 3 | **SERVER** | Create a new Stoat server or attach to an existing one |
@@ -116,6 +117,7 @@ finer-grained resume; messages already sent are deduplicated via the `nonce` fie
 | Path | Purpose |
 |------|---------|
 | `src/discord_ferry/core/` | Engine (`engine.py`) and event system (`events.py`) |
+| `src/discord_ferry/exporter/` | DCE binary management and subprocess execution (orchestrated mode) |
 | `src/discord_ferry/parser/` | DCE JSON parsing and data model dataclasses |
 | `src/discord_ferry/uploader/` | Autumn file upload client with caching |
 | `src/discord_ferry/migrator/` | One module per migration phase |
@@ -124,14 +126,29 @@ finer-grained resume; messages already sent are deduplicated via the `nonce` fie
 | `src/discord_ferry/errors.py` | Custom exception hierarchy |
 | `src/discord_ferry/parser/transforms.py` | Mention/emoji remapping, embed flattening, poll/sticker rendering |
 | `src/discord_ferry/reporter.py` | Migration report generation |
-| `src/discord_ferry/gui.py` | NiceGUI shell — 3-screen workflow |
+| `src/discord_ferry/gui.py` | NiceGUI shell — 4-screen workflow (Setup, Export, Validate, Migrate) |
 | `src/discord_ferry/cli.py` | Click shell — `migrate` and `validate` commands |
+
+The `exporter/` module has the following structure:
+
+```
+src/discord_ferry/exporter/
+├── __init__.py    # Public API
+├── manager.py     # DCE binary download and version management
+└── runner.py      # Async subprocess execution and progress parsing
+```
 
 ---
 
 ## Data Flow Summary
 
 ```
+Discord API (orchestrated mode only)
+      │
+      ▼
+  exporter/        Download DCE binary → run export → produce DCE JSON files
+      │
+      ▼
 DCE JSON files
       │
       ▼
@@ -147,5 +164,6 @@ DCE JSON files
       └── state.py     Persist ID mappings after each phase
 ```
 
+The exporter is only active in orchestrated mode; offline mode starts directly at the parser step.
 The parser is pure (no I/O beyond reading files). The uploader is the only component that talks to
 Autumn. The migrator modules are the only components that talk to the Stoat API.

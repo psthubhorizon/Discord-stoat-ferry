@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "discord-ferry"
-version = "1.1.0"
+version = "1.2.0"
 description = "Migrate Discord servers to Stoat (formerly Revolt)"
 readme = "README.md"
 license = "MIT"
@@ -26,10 +26,11 @@ classifiers = [
 
 dependencies = [
     "aiohttp>=3.9",
-    "nicegui>=2.0",
     "click>=8.0",
-    "rich>=13.0",
+    "ijson>=3.0",
+    "nicegui>=2.0",
     "python-dotenv",
+    "rich>=13.0",
 ]
 
 [project.scripts]

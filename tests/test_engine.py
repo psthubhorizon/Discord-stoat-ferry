@@ -41,6 +41,7 @@ def _make_config(tmp_path: Path, **overrides: object) -> FerryConfig:
         "stoat_url": "https://api.test",
         "token": "test-token",
         "output_dir": tmp_path,
+        "skip_export": True,  # existing tests use offline mode
     }
     defaults.update(overrides)
     return FerryConfig(**defaults)  # type: ignore[arg-type]
@@ -262,7 +263,8 @@ async def test_run_migration_unimplemented_phases_skipped(tmp_path: Path) -> Non
     skipped_phases = {e.phase for e in skipped_events}
     # Phases with overrides or defaults run normally; only truly unimplemented ones are skipped
     implemented_phases = set(_NOOP_OVERRIDES.keys())
-    for phase in PHASE_ORDER[1:-1]:
+    runnable = [p for p in PHASE_ORDER if p not in ("export", "validate", "report")]
+    for phase in runnable:
         if phase in implemented_phases:
             continue
         assert phase in skipped_phases, f"{phase} should be skipped when unimplemented"
@@ -311,3 +313,17 @@ async def test_run_migration_default_connect_phase(tmp_path: Path) -> None:
     connect_events = [e for e in events if e.phase == "connect"]
     assert any(e.status == "started" for e in connect_events)
     assert any(e.status == "completed" for e in connect_events)
+
+
+async def test_export_phase_in_phase_order() -> None:
+    """PHASE_ORDER starts with 'export'."""
+    assert PHASE_ORDER[0] == "export"
+
+
+async def test_export_skipped_in_offline_mode(tmp_path: Path) -> None:
+    """When skip_export is True, the export phase is skipped."""
+    events: list[MigrationEvent] = []
+    config = _make_config(tmp_path, skip_export=True)
+    await run_migration(config, events.append, phase_overrides=_NOOP_OVERRIDES)
+    export_events = [e for e in events if e.phase == "export"]
+    assert any(e.status == "skipped" for e in export_events)

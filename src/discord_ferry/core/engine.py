@@ -11,7 +11,14 @@ import aiohttp
 
 from discord_ferry.config import FerryConfig
 from discord_ferry.core.events import EventCallback, MigrationEvent
-from discord_ferry.errors import MigrationError
+from discord_ferry.errors import DotNetMissingError, MigrationError
+from discord_ferry.exporter import (
+    detect_dotnet,
+    download_dce,
+    get_dce_path,
+    run_dce_export,
+    validate_discord_token,
+)
 from discord_ferry.migrator.connect import run_connect
 from discord_ferry.migrator.emoji import run_emoji
 from discord_ferry.migrator.messages import run_messages
@@ -29,6 +36,7 @@ PhaseFunction = Callable[
 ]
 
 PHASE_ORDER: list[str] = [
+    "export",  # Phase 0 — handled inline (DCE subprocess)
     "validate",  # Phase 1 — handled inline (parser)
     "connect",  # Phase 2
     "server",  # Phase 3
@@ -44,6 +52,7 @@ PHASE_ORDER: list[str] = [
 
 # Phases that can be skipped via config flags
 _SKIPPABLE: dict[str, str] = {
+    "export": "skip_export",
     "emoji": "skip_emoji",
     "messages": "skip_messages",
     "reactions": "skip_reactions",
@@ -68,7 +77,7 @@ async def run_migration(
     on_event: EventCallback,
     phase_overrides: dict[str, PhaseFunction] | None = None,
 ) -> MigrationState:
-    """Run the full 11-phase migration.
+    """Run the full 12-phase migration.
 
     Args:
         config: Migration configuration.
@@ -96,20 +105,33 @@ async def run_migration(
         state.started_at = datetime.now(timezone.utc).isoformat()
         state.is_dry_run = config.dry_run
 
+    # Phase 0: EXPORT — run DCE subprocess inline (orchestrated mode)
+    if not config.skip_export:
+        on_event(MigrationEvent(phase="export", status="started", message="Starting export..."))
+        await validate_discord_token(config.discord_token or "")
+        if not detect_dotnet():
+            raise DotNetMissingError(
+                "DCE requires .NET 8 runtime. "
+                "Install from https://dotnet.microsoft.com/download/dotnet/8.0"
+            )
+        dce_path = get_dce_path()
+        if dce_path is None:
+            dce_path = await download_dce(on_event)
+        await run_dce_export(config, dce_path, on_event)
+        state.export_completed = True
+        save_state(state, config.output_dir)
+        on_event(MigrationEvent(phase="export", status="completed", message="Export complete."))
+    else:
+        on_event(MigrationEvent(phase="export", status="skipped", message="Using existing exports"))
+
     # Phase 1: VALIDATE — parse exports inline
     on_event(MigrationEvent(phase="validate", status="started", message="Parsing exports..."))
-    exports = parse_export_directory(config.export_dir)
-    warnings = validate_export(exports, config.export_dir)
+    exports = parse_export_directory(config.export_dir, metadata_only=True)
+    # Validate and collect author names in a single pass over all messages.
+    warnings = validate_export(exports, config.export_dir, author_names=state.author_names)
     for w in warnings:
         state.warnings.append(w)
         on_event(MigrationEvent(phase="validate", status="warning", message=w["message"]))
-
-    # Build author_names from exports (prefer nickname over name)
-    for export in exports:
-        for msg in export.messages:
-            author = msg.author
-            if author.id not in state.author_names:
-                state.author_names[author.id] = author.nickname or author.name
 
     total_messages = sum(e.message_count for e in exports)
     on_event(
@@ -122,7 +144,7 @@ async def run_migration(
     )
 
     # Phases 2-10: run in order, skipping as appropriate
-    runnable_phases = PHASE_ORDER[1:-1]  # exclude validate and report
+    runnable_phases = [p for p in PHASE_ORDER if p not in ("export", "validate", "report")]
 
     async with aiohttp.ClientSession() as session:
         config.session = session

@@ -75,7 +75,9 @@ def test_validate_empty_dir(runner: CliRunner, tmp_path: Path) -> None:
 
 def test_migrate_missing_url(runner: CliRunner) -> None:
     result = runner.invoke(
-        main, ["migrate", FIXTURES_DIR, "--token", "test-token"], catch_exceptions=False
+        main,
+        ["migrate", "--export-dir", FIXTURES_DIR, "--token", "test-token"],
+        catch_exceptions=False,
     )
     assert result.exit_code == 1
     assert "--stoat-url is required" in result.output
@@ -84,7 +86,7 @@ def test_migrate_missing_url(runner: CliRunner) -> None:
 def test_migrate_missing_token(runner: CliRunner) -> None:
     result = runner.invoke(
         main,
-        ["migrate", FIXTURES_DIR, "--stoat-url", "http://localhost"],
+        ["migrate", "--export-dir", FIXTURES_DIR, "--stoat-url", "http://localhost"],
         catch_exceptions=False,
     )
     assert result.exit_code == 1
@@ -109,6 +111,7 @@ def test_migrate_calls_engine(runner: CliRunner) -> None:
             main,
             [
                 "migrate",
+                "--export-dir",
                 FIXTURES_DIR,
                 "--stoat-url",
                 "http://localhost",
@@ -123,6 +126,7 @@ def test_migrate_calls_engine(runner: CliRunner) -> None:
     assert config.stoat_url == "http://localhost"
     assert config.token == "test-token"
     assert config.export_dir == Path(FIXTURES_DIR)
+    assert config.skip_export is True
 
 
 def test_migrate_resume_flag(runner: CliRunner) -> None:
@@ -132,6 +136,7 @@ def test_migrate_resume_flag(runner: CliRunner) -> None:
             main,
             [
                 "migrate",
+                "--export-dir",
                 FIXTURES_DIR,
                 "--stoat-url",
                 "http://localhost",
@@ -153,6 +158,7 @@ def test_migrate_skip_flags(runner: CliRunner) -> None:
             main,
             [
                 "migrate",
+                "--export-dir",
                 FIXTURES_DIR,
                 "--stoat-url",
                 "http://localhost",
@@ -180,6 +186,7 @@ def test_migrate_rate_limit(runner: CliRunner) -> None:
             main,
             [
                 "migrate",
+                "--export-dir",
                 FIXTURES_DIR,
                 "--stoat-url",
                 "http://localhost",
@@ -201,7 +208,7 @@ def test_migrate_env_vars(runner: CliRunner) -> None:
     with patch("discord_ferry.cli.run_migration", mock_engine):
         result = runner.invoke(
             main,
-            ["migrate", FIXTURES_DIR],
+            ["migrate", "--export-dir", FIXTURES_DIR],
             env=env,
             catch_exceptions=False,
         )
@@ -218,6 +225,7 @@ def test_migrate_engine_error(runner: CliRunner) -> None:
             main,
             [
                 "migrate",
+                "--export-dir",
                 FIXTURES_DIR,
                 "--stoat-url",
                 "http://localhost",
@@ -236,6 +244,7 @@ def test_verbose_flag(runner: CliRunner) -> None:
             main,
             [
                 "migrate",
+                "--export-dir",
                 FIXTURES_DIR,
                 "--stoat-url",
                 "http://localhost",
@@ -248,3 +257,72 @@ def test_verbose_flag(runner: CliRunner) -> None:
     assert result.exit_code == 0
     config: FerryConfig = mock_engine.call_args[0][0]
     assert config.verbose is True
+
+
+# ---------------------------------------------------------------------------
+# Migrate — orchestrated mode
+# ---------------------------------------------------------------------------
+
+
+def test_migrate_orchestrated_mode(runner: CliRunner) -> None:
+    """Orchestrated mode: --discord-token + --discord-server sets skip_export=False."""
+    mock_engine = _make_mock_engine()
+    with patch("discord_ferry.cli.run_migration", mock_engine):
+        result = runner.invoke(
+            main,
+            [
+                "migrate",
+                "--discord-token",
+                "dt",
+                "--discord-server",
+                "12345",
+                "--stoat-url",
+                "http://localhost",
+                "--token",
+                "t",
+            ],
+            catch_exceptions=False,
+        )
+    assert result.exit_code == 0
+    config: FerryConfig = mock_engine.call_args[0][0]
+    assert config.discord_token == "dt"
+    assert config.discord_server_id == "12345"
+    assert config.skip_export is False
+
+
+def test_migrate_mutual_exclusion(runner: CliRunner) -> None:
+    """Cannot use both --export-dir and --discord-token."""
+    result = runner.invoke(
+        main,
+        [
+            "migrate",
+            "--export-dir",
+            FIXTURES_DIR,
+            "--discord-token",
+            "dt",
+            "--discord-server",
+            "12345",
+            "--stoat-url",
+            "http://localhost",
+            "--token",
+            "t",
+        ],
+    )
+    assert result.exit_code == 1
+    assert "Cannot use both" in result.output
+
+
+def test_migrate_neither_mode(runner: CliRunner) -> None:
+    """Must provide either --export-dir or --discord-token."""
+    result = runner.invoke(
+        main,
+        [
+            "migrate",
+            "--stoat-url",
+            "http://localhost",
+            "--token",
+            "t",
+        ],
+    )
+    assert result.exit_code == 1
+    assert "Provide either" in result.output

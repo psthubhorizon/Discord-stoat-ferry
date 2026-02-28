@@ -21,7 +21,7 @@ from discord_ferry.state import load_state
 
 _HAS_WEBVIEW = False
 try:
-    import webview
+    import webview  # type: ignore[import-not-found]
 
     _HAS_WEBVIEW = True
 except ImportError:
@@ -36,6 +36,7 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 
 _PHASE_LABELS: dict[str, str] = {
+    "export": "Export",
     "validate": "Validate",
     "connect": "Connect",
     "server": "Server",
@@ -72,7 +73,7 @@ _HEAD_HTML = (
     "</style>"
 )
 
-_STEP_LABELS: list[str] = ["Configure", "Validate", "Migrate", "Done"]
+_STEP_LABELS: list[str] = ["Configure", "Export", "Validate", "Migrate", "Done"]
 
 
 # ---------------------------------------------------------------------------
@@ -222,9 +223,9 @@ def setup_page() -> None:
             for icon, text, link, link_text in [
                 (
                     "o_check_circle",
-                    "A Discord export folder from ",
-                    "https://github.com/Tyrrrz/DiscordChatExporter",
-                    "DiscordChatExporter",
+                    "Discord credentials (token + server ID) or a DCE export folder",
+                    None,
+                    None,
                 ),
                 (
                     "o_check_circle",
@@ -259,19 +260,66 @@ def setup_page() -> None:
 
             # Form body
             with ui.column().classes("w-full px-6 py-5 gap-4"):
-                # Export folder with inline browse button
-                with ui.input(  # noqa: SIM117
-                    label="Export folder path",
-                    placeholder="/path/to/your/dce-export",
-                    value=str(storage.get("export_dir", "")),
-                ).classes("w-full") as export_dir_input:
-                    with export_dir_input.add_slot("append"):
-                        browse_btn = ui.button(icon="folder_open", on_click=_on_browse).props(
-                            "flat dense"
-                        )
-                        if not _HAS_WEBVIEW:
-                            browse_btn.disable()
-                            browse_btn.tooltip("Install pywebview for folder picker")
+                # Mode selection
+                ui.label("Migration mode").classes("text-sm font-medium text-gray-700 -mb-2")
+                mode_toggle = ui.toggle(
+                    {
+                        "orchestrated": "1-Click Migration",
+                        "offline": "I already have exports",
+                    },
+                    value=storage.get("mode", "orchestrated"),
+                ).classes("w-full")
+
+                # Discord credentials (orchestrated mode)
+                with (
+                    ui.column()
+                    .classes("w-full gap-4")
+                    .bind_visibility_from(mode_toggle, "value", value="orchestrated")
+                ):
+                    discord_token_input = ui.input(
+                        label="Discord token",
+                        placeholder="Paste your Discord user token",
+                        password=True,
+                        password_toggle_button=True,
+                        value=str(storage.get("discord_token", "")),
+                    ).classes("w-full")
+
+                    discord_server_input = ui.input(
+                        label="Discord server ID",
+                        placeholder="Right-click server > Copy Server ID",
+                        value=str(storage.get("discord_server_id", "")),
+                    ).classes("w-full")
+
+                    with ui.row().classes("items-center gap-1 -mt-2"):
+                        ui.icon("help_outline", size="16px").classes("text-gray-400")
+                        ui.link(
+                            "How to find your Discord token and server ID",
+                            "https://github.com/Tyrrrz/DiscordChatExporter/wiki",
+                            new_tab=True,
+                        ).classes("text-xs text-blue-600")
+
+                    tos_checkbox = ui.checkbox(
+                        "I acknowledge that using a user token may violate Discord's ToS"
+                    ).classes("text-sm")
+
+                # Export folder (offline mode)
+                with (  # noqa: SIM117
+                    ui.column()
+                    .classes("w-full gap-2")
+                    .bind_visibility_from(mode_toggle, "value", value="offline")
+                ):
+                    with ui.input(  # noqa: SIM117
+                        label="Export folder path",
+                        placeholder="/path/to/your/dce-export",
+                        value=str(storage.get("export_dir", "")),
+                    ).classes("w-full") as export_dir_input:
+                        with export_dir_input.add_slot("append"):
+                            browse_btn = ui.button(icon="folder_open", on_click=_on_browse).props(
+                                "flat dense"
+                            )
+                            if not _HAS_WEBVIEW:
+                                browse_btn.disable()
+                                browse_btn.tooltip("Install pywebview for folder picker")
 
                 # Hosted / self-hosted toggle
                 ui.label("Stoat instance").classes("text-sm font-medium text-gray-700 -mb-2")
@@ -357,14 +405,30 @@ def setup_page() -> None:
                 error_label = ui.label("").classes("text-red-500 text-sm")
 
                 def _on_validate_click() -> None:
-                    export_dir = export_dir_input.value.strip()
+                    mode = mode_toggle.value or "orchestrated"
                     toggle_val = server_toggle.value or "official"
                     stoat_url = _resolve_stoat_url(toggle_val, custom_url_input.value)
                     token = token_input.value.strip()
 
                     missing: list[str] = []
-                    if not export_dir:
-                        missing.append("Export folder")
+
+                    if mode == "orchestrated":
+                        discord_token = discord_token_input.value.strip()
+                        discord_server = discord_server_input.value.strip()
+                        if not discord_token:
+                            missing.append("Discord token")
+                        if not discord_server:
+                            missing.append("Discord server ID")
+                        if not tos_checkbox.value:
+                            error_label.set_text("You must acknowledge the Discord ToS disclaimer")
+                            return
+                    else:
+                        discord_token = ""
+                        discord_server = ""
+                        export_dir = export_dir_input.value.strip()
+                        if not export_dir:
+                            missing.append("Export folder")
+
                     if toggle_val == "self-hosted" and not stoat_url:
                         missing.append("Stoat API URL")
                     elif toggle_val == "self-hosted" and not stoat_url.startswith(
@@ -378,7 +442,15 @@ def setup_page() -> None:
                         error_label.set_text(f"Required: {', '.join(missing)}")
                         return
 
-                    storage["export_dir"] = export_dir
+                    # Store values
+                    storage["mode"] = mode
+                    storage["discord_token"] = discord_token
+                    storage["discord_server_id"] = discord_server
+                    if mode == "offline":
+                        storage["export_dir"] = export_dir_input.value.strip()
+                    else:
+                        output_dir = str(storage.get("output_dir", "./ferry-output"))
+                        storage["export_dir"] = str(Path(output_dir) / "dce_cache" / discord_server)
                     storage["stoat_url"] = stoat_url
                     storage["server_toggle"] = toggle_val
                     storage["custom_stoat_url"] = custom_url_input.value.strip()
@@ -391,16 +463,164 @@ def setup_page() -> None:
                     storage["skip_reactions"] = skip_reactions_cb.value
                     storage["skip_threads"] = skip_threads_cb.value
                     storage["dry_run"] = dry_run_check.value
+                    storage["skip_export"] = mode == "offline"
 
-                    ui.navigate.to("/validate")
+                    if mode == "orchestrated":
+                        ui.navigate.to("/export")
+                    else:
+                        ui.navigate.to("/validate")
 
-                ui.button("Validate Export", on_click=_on_validate_click).classes(
-                    "w-full mt-2"
-                ).props("color=amber-7 text-color=white unelevated").classes("font-semibold")
+                ui.button("Continue", on_click=_on_validate_click).classes("w-full mt-2").props(
+                    "color=amber-7 text-color=white unelevated"
+                ).classes("font-semibold")
 
 
 # ---------------------------------------------------------------------------
-# Screen 2: Validate
+# Screen 2: Export (orchestrated mode only)
+# ---------------------------------------------------------------------------
+
+
+@ui.page("/export")
+def export_page() -> None:
+    """Export screen — run DCE subprocess, show per-channel progress."""
+    from discord_ferry.core.events import MigrationEvent as _MigrationEvent
+
+    ui.add_head_html(_HEAD_HTML)
+
+    storage = app.storage.user
+    if storage.get("mode") != "orchestrated":
+        ui.navigate.to("/validate")
+        return
+
+    with ui.column().classes("w-full items-center min-h-screen bg-gray-50 py-10"):
+        with ui.element("div").classes("w-full max-w-2xl fade-in"):
+            _render_step_indicator(active_step=2)
+
+        with ui.card().classes("w-full max-w-2xl shadow-md fade-in"):
+            ui.label("Exporting from Discord").classes("text-2xl font-bold text-center mt-2")
+            ui.label("Running DiscordChatExporter...").classes(
+                "text-sm text-gray-500 text-center mb-4"
+            )
+
+            progress_bar = ui.linear_progress(value=0).classes("w-full")
+            progress_bar.props("stripe animated color=blue")
+
+            channel_label = ui.label("Preparing...").classes("text-sm text-gray-600 mt-2")
+            log_display = ui.log(max_lines=200).classes("w-full h-48 font-mono text-xs mt-4")
+
+            cancel_event = asyncio.Event()
+
+            with ui.row().classes("w-full justify-end gap-2 mt-4"):
+                ui.button(
+                    "Cancel",
+                    on_click=lambda: cancel_event.set(),
+                ).classes("bg-red-600 text-white")
+
+    def on_export_event(event: _MigrationEvent) -> None:
+        with contextlib.suppress(Exception):
+            if event.phase != "export":
+                return
+            log_display.push(f"[{event.status}] {event.message}")
+            if event.status == "progress":
+                if event.total > 0:
+                    progress_bar.set_value(event.current / event.total)
+                if event.channel_name:
+                    channel_label.set_text(f"Exporting #{event.channel_name}...")
+            elif event.status == "completed":
+                channel_label.set_text("Export complete!")
+                progress_bar.set_value(1.0)
+            elif event.status == "error":
+                channel_label.set_text(f"Error: {event.message}")
+
+    async def _run_export() -> None:
+        from discord_ferry.errors import DiscordAuthError, DotNetMissingError
+        from discord_ferry.exporter import (
+            detect_dotnet,
+            download_dce,
+            get_dce_path,
+            run_dce_export,
+            validate_discord_token,
+        )
+
+        discord_token = str(storage.get("discord_token", ""))
+        discord_server = str(storage.get("discord_server_id", ""))
+        export_dir = Path(str(storage["export_dir"]))
+
+        try:
+            on_export_event(
+                _MigrationEvent(
+                    phase="export",
+                    status="started",
+                    message="Validating Discord token...",
+                )
+            )
+            await validate_discord_token(discord_token)
+
+            on_export_event(
+                _MigrationEvent(
+                    phase="export",
+                    status="progress",
+                    message="Checking for DCE binary...",
+                )
+            )
+            dce_path = get_dce_path()
+            if dce_path is None:
+                on_export_event(
+                    _MigrationEvent(
+                        phase="export",
+                        status="progress",
+                        message="Downloading DCE...",
+                    )
+                )
+                dce_path = await download_dce(on_export_event)
+
+            if not detect_dotnet():
+                raise DotNetMissingError(
+                    "DCE requires .NET 8 runtime. "
+                    "Install from https://dotnet.microsoft.com/download/dotnet/8.0"
+                )
+
+            config = FerryConfig(
+                export_dir=export_dir,
+                stoat_url=str(storage.get("stoat_url", "")),
+                token=str(storage.get("token", "")),
+                discord_token=discord_token,
+                discord_server_id=discord_server,
+                cancel_event=cancel_event,
+            )
+
+            await run_dce_export(config, dce_path, on_export_event)
+
+            on_export_event(
+                _MigrationEvent(
+                    phase="export",
+                    status="completed",
+                    message="Export complete!",
+                )
+            )
+
+            # Auto-navigate to validate
+            await asyncio.sleep(1)
+            ui.navigate.to("/validate")
+
+        except DiscordAuthError as exc:
+            on_export_event(_MigrationEvent(phase="export", status="error", message=str(exc)))
+            ui.notify(f"Discord auth failed: {exc}", type="negative")
+        except DotNetMissingError as exc:
+            on_export_event(_MigrationEvent(phase="export", status="error", message=str(exc)))
+            ui.notify(str(exc), type="negative")
+        except Exception as exc:
+            on_export_event(_MigrationEvent(phase="export", status="error", message=str(exc)))
+            ui.notify(f"Export failed: {exc}", type="negative")
+        finally:
+            # Clear Discord token from storage (security — avoid persisting to disk)
+            storage.pop("discord_token", None)
+
+    background_tasks.create(_run_export())
+
+
+# ---------------------------------------------------------------------------
+# Screen 3: Validate
 # ---------------------------------------------------------------------------
 
 
@@ -419,7 +639,7 @@ def validate_page() -> None:
 
     with ui.column().classes("w-full items-center min-h-screen bg-gray-50 py-10"):
         with ui.element("div").classes("w-full max-w-2xl fade-in"):
-            _render_step_indicator(active_step=2)
+            _render_step_indicator(active_step=3)
 
         with ui.card().classes("w-full max-w-2xl shadow-md fade-in"):
             # Parse export — these are fast synchronous operations
@@ -537,7 +757,7 @@ def migrate_page() -> None:
 
     with ui.column().classes("w-full items-center"):  # noqa: SIM117
         with ui.element("div").classes("w-full max-w-3xl fade-in mt-10 mb-0"):
-            _render_step_indicator(active_step=3)
+            _render_step_indicator(active_step=4)
 
     if needs_resume_choice:
         with ui.card().classes("w-full max-w-2xl mx-auto mb-4 bg-amber-50 border-amber-300"):
@@ -583,6 +803,9 @@ def migrate_page() -> None:
         resume=bool(storage.get("resume", False)),
         pause_event=pause_event,
         cancel_event=cancel_event,
+        skip_export=True,  # Export already done by this point (via /export or offline mode)
+        discord_token=storage.get("discord_token") or None,
+        discord_server_id=storage.get("discord_server_id") or None,
     )
 
     # ---------------------------------------------------------------------------

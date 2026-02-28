@@ -1,19 +1,30 @@
 # Your First Migration
 
-This guide walks you through migrating a Discord server to Stoat from start to finish. It assumes you have already followed the [install guide](install.md), the [export guide](export-discord.md), and the [setup guide](setup-stoat.md).
+This guide walks you through migrating a Discord server to Stoat from start to finish. It assumes you have already followed the [install guide](install.md) and the [Stoat setup guide](setup-stoat.md).
 
 ---
 
 ## Prerequisites checklist
 
-Before you start, confirm you have all three of these ready:
+Before you start, confirm you have these ready:
 
-- [ ] Your Discord export folder (produced by DiscordChatExporter — contains `.json` files and a `media/` subfolder)
-- [ ] Your Stoat API URL (e.g. `https://api.stoat.chat` for the official host, or your self-hosted address)
-- [ ] Your Stoat user token (from your Stoat account settings)
+**For 1-Click Migration (recommended):**
 
-!!! warning "Token security"
-    Your Stoat token gives full access to your account. Never share it, and never paste it into a chat message or public document.
+- [ ] Your Discord user token ([how to find it](https://github.com/Tyrrrz/DiscordChatExporter/wiki/Obtaining-Token))
+- [ ] Your Discord server ID (right-click the server name > Copy Server ID)
+- [ ] Your Stoat API URL (`https://api.stoat.chat` for the official host)
+- [ ] Your Stoat bot token (from your Stoat account settings)
+
+**For Offline Migration (advanced):**
+
+- [ ] Your Discord export folder (produced by DiscordChatExporter)
+- [ ] Your Stoat API URL and bot token (same as above)
+
+!!! warning "Discord token security"
+    Your Discord token gives full access to your account. Never share it. Ferry does not store it to disk — it is held in memory only during the export.
+
+!!! warning "Discord Terms of Service"
+    Using a user token with third-party tools may violate Discord's Terms of Service. Ferry displays a disclaimer checkbox before proceeding. Use at your own risk.
 
 ---
 
@@ -33,10 +44,14 @@ Before you start, confirm you have all three of these ready:
 === "CLI (Linux / advanced)"
 
     1. Open a terminal.
-    2. Run the migrate command, pointing at your export folder:
+    2. Run the migrate command with your credentials:
 
     ```
-    ferry migrate ./path/to/export/
+    ferry migrate \
+      --discord-token YOUR_DISCORD_TOKEN \
+      --discord-server YOUR_SERVER_ID \
+      --stoat-url https://api.stoat.chat \
+      --token YOUR_STOAT_TOKEN
     ```
 
     Required flags (`--stoat-url` and `--token`) must be passed on the command line or set as environment variables (`STOAT_URL`, `STOAT_TOKEN`). See Step 2 for full options.
@@ -47,11 +62,21 @@ Before you start, confirm you have all three of these ready:
 
 === "GUI (Windows / macOS)"
 
-    Fill in the three required fields on the Setup screen:
+    Fill in the fields on the Setup screen:
 
-    1. **Export folder** — click **Browse** and select the folder, or paste the full path directly.
-    2. **Stoat API URL** — paste the URL from your setup guide (e.g. `https://api.stoat.chat`).
-    3. **Stoat Token** — paste your token. It will be masked as you type.
+    **1-Click Migration mode (default):**
+
+    1. **Discord token** — paste your Discord user token (masked input).
+    2. **Discord server ID** — paste the server ID.
+    3. **Acknowledge the ToS disclaimer** — check the checkbox.
+    4. **Stoat API URL** — select Official or Self-hosted.
+    5. **Bot token** — paste your Stoat bot token.
+
+    **Offline mode ("I already have exports"):**
+
+    1. Toggle to **"I already have exports"**.
+    2. **Export folder** — browse to your DCE export folder.
+    3. **Stoat API URL** and **Bot token** — same as above.
 
     <!-- screenshot: ferry-setup-filled -->
 
@@ -65,12 +90,23 @@ Before you start, confirm you have all three of these ready:
 
 === "CLI (Linux / advanced)"
 
-    Pass options as flags on the command line:
+    **Orchestrated mode (recommended):**
 
     ```
-    ferry migrate ./export/ \
-      --stoat-url https://api.your-stoat.com \
-      --token YOUR_TOKEN_HERE
+    ferry migrate \
+      --discord-token YOUR_DISCORD_TOKEN \
+      --discord-server YOUR_SERVER_ID \
+      --stoat-url https://api.stoat.chat \
+      --token YOUR_STOAT_TOKEN
+    ```
+
+    **Offline mode (with existing exports):**
+
+    ```
+    ferry migrate \
+      --export-dir ./path/to/export/ \
+      --stoat-url https://api.stoat.chat \
+      --token YOUR_STOAT_TOKEN
     ```
 
     Additional flags:
@@ -86,6 +122,28 @@ Before you start, confirm you have all three of these ready:
     | `--dry-run` | Run all phases without making any API calls |
     | `--max-channels N` | Channel limit (default `200`; raise for self-hosted) |
     | `--max-emoji N` | Emoji limit (default `100`; raise for self-hosted) |
+
+---
+
+## Step 2.5: Export (1-Click mode only)
+
+=== "GUI (Windows / macOS)"
+
+    After clicking **Continue**, the Export screen appears. Ferry:
+
+    1. Validates your Discord token
+    2. Downloads DiscordChatExporter if not already present
+    3. Exports all channels, threads, and media from your Discord server
+    4. Shows per-channel progress
+
+    This step is automatic. When it finishes, Ferry moves to the Validate screen.
+
+    !!! info ".NET Runtime required on macOS and Linux"
+        DCE requires the .NET 8 runtime. If Ferry detects it is missing, it will show an error with a download link. Windows users are not affected — the Windows DCE build is self-contained.
+
+=== "CLI (Linux / advanced)"
+
+    In orchestrated mode, the export runs automatically before validation. You will see progress output as DCE exports each channel.
 
 ---
 
@@ -215,7 +273,7 @@ After a successful migration:
     Add `--resume` to your original command:
 
     ```
-    ferry migrate ./export/ --stoat-url ... --token ... --resume
+    ferry migrate --discord-token ... --discord-server ... --stoat-url ... --token ... --resume
     ```
 
 **Seeing errors in the log?**
