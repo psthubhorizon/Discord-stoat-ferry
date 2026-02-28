@@ -328,6 +328,7 @@ async def api_send_message(
     masquerade: dict[str, str | None] | None = None,
     replies: list[dict[str, Any]] | None = None,
     nonce: str | None = None,
+    silent: bool = True,
 ) -> dict[str, Any]:
     """Send a message to a channel.
 
@@ -342,6 +343,7 @@ async def api_send_message(
         masquerade: Masquerade dict with name/avatar/colour fields (values may be None). Optional.
         replies: List of reply reference dicts. Optional.
         nonce: Deduplication nonce (use ``f"ferry-{discord_msg_id}"``). Optional.
+        silent: Suppress notifications. Defaults to True to avoid spam during migration.
 
     Returns:
         Message object dict from the API (includes ``_id``).
@@ -360,6 +362,8 @@ async def api_send_message(
         data["replies"] = replies
     if nonce is not None:
         data["nonce"] = nonce
+    if silent:
+        data["silent"] = True
     return await _api_request(session, "POST", url, token, data)
 
 

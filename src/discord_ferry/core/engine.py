@@ -136,8 +136,8 @@ async def run_migration(
     # Phase 11: REPORT — generate and save inline
     state.current_phase = "report"
     on_event(MigrationEvent(phase="report", status="started", message="Generating report..."))
-    generate_report(config, state, exports)
     state.completed_at = datetime.now(timezone.utc).isoformat()
+    generate_report(config, state, exports)
     save_state(state, config.output_dir)
     on_event(MigrationEvent(phase="report", status="completed", message="Migration complete"))
 

@@ -48,6 +48,7 @@ class MigrationState:
     last_completed_message: str = ""
 
     # Counters (incremented by phase implementations)
+    attachments_uploaded: int = 0
     attachments_skipped: int = 0
     reactions_applied: int = 0
     pins_applied: int = 0
@@ -113,6 +114,7 @@ def _state_to_dict(state: MigrationState) -> dict[str, Any]:
         "current_phase": state.current_phase,
         "last_completed_channel": state.last_completed_channel,
         "last_completed_message": state.last_completed_message,
+        "attachments_uploaded": state.attachments_uploaded,
         "attachments_skipped": state.attachments_skipped,
         "reactions_applied": state.reactions_applied,
         "pins_applied": state.pins_applied,
@@ -142,6 +144,7 @@ def _dict_to_state(data: dict[str, Any]) -> MigrationState:
             current_phase=data.get("current_phase", ""),
             last_completed_channel=data.get("last_completed_channel", ""),
             last_completed_message=data.get("last_completed_message", ""),
+            attachments_uploaded=data.get("attachments_uploaded", 0),
             attachments_skipped=data.get("attachments_skipped", 0),
             reactions_applied=data.get("reactions_applied", 0),
             pins_applied=data.get("pins_applied", 0),

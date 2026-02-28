@@ -6,6 +6,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [0.10.0] — 2026-02-28
+
+### Added
+
+- **Rich CLI progress bars**: Live dashboard with phase progress bar, per-channel message progress bar with ETA, and running stats (messages/errors/warnings)
+- **Poll migration**: DCE poll data parsed and flattened into message content as formatted text
+- **Sticker image upload**: Locally downloaded sticker images uploaded as message attachments (text fallback for missing/Lottie stickers)
+- **Embed media upload**: Embed thumbnails and images from local `--media` exports uploaded to Autumn and attached to embeds
+- **Forum categories**: Forum/media channel threads (type 15/16) grouped into dedicated categories named after the parent forum
+- **Role rank ordering**: Best-effort second pass sets role rank from DCE position data after creation
+- **Permission pre-check**: CONNECT phase verifies server accessibility when using `--server-id` (best-effort, non-fatal)
+- **`skip_threads` GUI checkbox**: Exposed in Advanced Options alongside existing skip toggles
+- **`attachments_uploaded` counter**: Accurate attachment count in state and reports (replaces deduplicated cache length)
+- **GitHub Actions docs workflow**: `docs.yml` builds and deploys MkDocs Material site to GitHub Pages on push to main
+- **12 new tests** covering polls, stickers, embeds, forum categories, role rank, permission pre-check — 298 total passing
+
+### Fixed
+
+- **`completed_at` timing**: Report timestamp now set before `generate_report()` runs, giving correct duration
+- **`silent` messages**: All migrated messages sent with `silent: true` to prevent notification spam
+- **Missing skip types**: `Call` and `ChannelIconChange` messages now skipped during import
+- **`ConnectionError` shadowing**: Renamed to `StoatConnectionError` to avoid shadowing Python builtin
+- **GUI resume race condition**: Migration start gated behind `asyncio.Event` until user clicks Resume or Start Fresh
+- **Embed/sticker upload errors logged**: Failures now recorded as warnings instead of silently swallowed
+
 ## [Unreleased-content]
 
 ### Fixed

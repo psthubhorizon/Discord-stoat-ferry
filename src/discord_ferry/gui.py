@@ -177,6 +177,7 @@ def setup_page() -> None:
                 skip_messages_cb = ui.checkbox("Skip messages (structure only)")
                 skip_emoji_cb = ui.checkbox("Skip emoji upload")
                 skip_reactions_cb = ui.checkbox("Skip reactions")
+                skip_threads_cb = ui.checkbox("Skip threads and forum posts")
                 dry_run_check = ui.checkbox("Dry run (no API calls)").classes("mt-2")
 
             error_label = ui.label("").classes("text-red-500 text-sm")
@@ -198,6 +199,7 @@ def setup_page() -> None:
                 app.storage.user["skip_messages"] = skip_messages_cb.value
                 app.storage.user["skip_emoji"] = skip_emoji_cb.value
                 app.storage.user["skip_reactions"] = skip_reactions_cb.value
+                app.storage.user["skip_threads"] = skip_threads_cb.value
                 app.storage.user["dry_run"] = dry_run_check.value
 
                 ui.navigate.to("/validate")
@@ -332,18 +334,23 @@ def migrate_page() -> None:
         with contextlib.suppress(Exception):
             previous_state = load_state(output_dir)
 
-    if previous_state and not previous_state.is_dry_run:
+    # Flag to gate migration start behind the resume/fresh choice.
+    resume_choice_made = asyncio.Event()
+    needs_resume_choice = previous_state is not None and not previous_state.is_dry_run
+
+    if needs_resume_choice:
         with ui.card().classes("w-full max-w-2xl mx-auto mb-4 bg-amber-50 border-amber-300"):
-            msgs_done = len(previous_state.message_map)
-            phase = previous_state.current_phase or "unknown"
+            msgs_done = len(previous_state.message_map)  # type: ignore[union-attr]
+            phase = previous_state.current_phase or "unknown"  # type: ignore[union-attr]
             ui.label("Previous migration found").classes("text-lg font-bold text-amber-800")
             ui.label(
-                f"Phase: {phase} | Messages: {msgs_done:,} | Errors: {len(previous_state.errors)}"
+                f"Phase: {phase} | Messages: {msgs_done:,} | Errors: {len(previous_state.errors)}"  # type: ignore[union-attr]
             ).classes("text-amber-700")
             with ui.row():
 
                 def _set_resume(val: bool) -> None:
                     storage["resume"] = val
+                    resume_choice_made.set()
 
                 ui.button("Resume", on_click=lambda: _set_resume(True)).classes(
                     "bg-amber-600 text-white"
@@ -351,6 +358,8 @@ def migrate_page() -> None:
                 ui.button("Start Fresh", on_click=lambda: _set_resume(False)).classes(
                     "bg-gray-400 text-white"
                 )
+    else:
+        resume_choice_made.set()  # No previous state — start immediately.
 
     # Build FerryConfig from stored values
     pause_event = asyncio.Event()
@@ -367,6 +376,7 @@ def migrate_page() -> None:
         skip_messages=bool(storage.get("skip_messages", False)),
         skip_emoji=bool(storage.get("skip_emoji", False)),
         skip_reactions=bool(storage.get("skip_reactions", False)),
+        skip_threads=bool(storage.get("skip_threads", False)),
         output_dir=output_dir,
         resume=bool(storage.get("resume", False)),
         pause_event=pause_event,
@@ -556,6 +566,12 @@ def migrate_page() -> None:
     # ---------------------------------------------------------------------------
 
     async def _run() -> None:
+        # Wait for the user to choose Resume or Start Fresh before starting.
+        await resume_choice_made.wait()
+
+        # Rebuild config with the final resume choice.
+        config.resume = bool(storage.get("resume", False))
+
         try:
             await run_migration(config, on_event=on_event)
         except MigrationError as exc:

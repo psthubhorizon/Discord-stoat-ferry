@@ -3,6 +3,8 @@
 import re
 from collections.abc import Callable
 from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
 
 # ---------------------------------------------------------------------------
 # Private helpers
@@ -112,17 +114,22 @@ def remap_emoji(content: str, emoji_map: dict[str, str]) -> str:
     return _transform_outside_code(content, lambda s: _EMOJI_RE.sub(replace_emoji, s))
 
 
-def flatten_embed(embed: dict[str, object]) -> dict[str, object]:
+def flatten_embed(
+    embed: dict[str, object],
+    export_dir: Path | None = None,
+) -> tuple[dict[str, object], Path | None]:
     """Convert a Discord embed dict to a Stoat-compatible SendableEmbed dict.
 
-    Stoat supports title, description, url, icon_url, and colour (British spelling).
+    Stoat supports title, description, url, icon_url, colour, and media.
     Rich embed sections (author, fields, footer) are flattened into description.
 
     Args:
         embed: Discord embed as parsed from DCE JSON.
+        export_dir: Root export directory for resolving local media paths.
 
     Returns:
-        Dict with only non-None values, ready for Stoat's SendableEmbed.
+        Tuple of (embed dict, local media path or None). The media path is set
+        when a thumbnail or image has a local file (downloaded via ``--media``).
     """
     parts: list[str] = []
 
@@ -181,7 +188,54 @@ def flatten_embed(embed: dict[str, object]) -> dict[str, object]:
     if parts:
         result["description"] = "\n\n".join(parts)
 
-    return result
+    # Extract media path from thumbnail or image (local files from --media export).
+    media_path: Path | None = None
+    if export_dir is not None:
+        for media_key in ("thumbnail", "image"):
+            media_obj = embed.get(media_key)
+            if isinstance(media_obj, dict):
+                media_url = media_obj.get("url", "")
+                if isinstance(media_url, str) and not media_url.startswith(("http://", "https://")):
+                    candidate = export_dir / media_url
+                    if candidate.exists():
+                        media_path = candidate
+                        break
+
+    return result, media_path
+
+
+def flatten_poll(poll: dict[str, Any]) -> str:
+    """Render a Discord poll as plain text for inclusion in message content.
+
+    Args:
+        poll: Poll dict from DCE JSON with ``question`` and ``answers`` keys.
+
+    Returns:
+        Formatted poll text like ``**Poll: question**\\n• Option — N votes``.
+    """
+    question = ""
+    q = poll.get("question")
+    if isinstance(q, dict):
+        question = q.get("text", "")
+    elif isinstance(q, str):
+        question = q
+
+    lines = [f"**Poll: {question}**"]
+    answers = poll.get("answers")
+    if isinstance(answers, list):
+        for answer in answers:
+            if not isinstance(answer, dict):
+                continue
+            text = ""
+            a = answer.get("text")
+            if isinstance(a, str):
+                text = a
+            elif isinstance(a, dict):
+                text = a.get("text", "")
+            votes = answer.get("votes", 0)
+            lines.append(f"\u2022 {text} \u2014 {votes} votes")
+
+    return "\n".join(lines)
 
 
 def format_original_timestamp(iso_timestamp: str) -> str:
@@ -198,20 +252,35 @@ def format_original_timestamp(iso_timestamp: str) -> str:
     return f"*[{utc_dt.strftime('%Y-%m-%d %H:%M')} UTC]*"
 
 
-def handle_stickers(stickers: list[dict[str, str]]) -> str:
-    """Build a string representation of Discord stickers for appending to content.
+def handle_stickers(
+    stickers: list[dict[str, str]],
+    export_dir: Path | None = None,
+) -> tuple[str, list[Path]]:
+    """Build a string representation of Discord stickers and collect local image paths.
 
     Args:
-        stickers: List of sticker dicts from DCE export. Each may have a "name" key.
+        stickers: List of sticker dicts from DCE export. Each may have "name"
+            and "sourceUrl" keys.
+        export_dir: Root export directory for resolving local sticker images.
 
     Returns:
-        Newline-prefixed sticker lines concatenated, or empty string if none.
+        Tuple of (text fallback, list of local image paths to upload as attachments).
     """
-    parts: list[str] = []
+    text_parts: list[str] = []
+    image_paths: list[Path] = []
     for sticker in stickers:
         name = sticker.get("name") or "unknown"
-        parts.append(f"\n[Sticker: {name}]")
-    return "".join(parts)
+        text_parts.append(f"\n[Sticker: {name}]")
+
+        # Check for locally downloaded sticker image.
+        if export_dir is not None:
+            source_url = sticker.get("sourceUrl", "")
+            if source_url and not source_url.startswith(("http://", "https://")):
+                local = export_dir / source_url
+                if local.exists():
+                    image_paths.append(local)
+
+    return "".join(text_parts), image_paths
 
 
 def strip_underline(content: str) -> str:

@@ -7,8 +7,8 @@ from typing import TYPE_CHECKING
 import aiohttp
 
 from discord_ferry.core.events import MigrationEvent
-from discord_ferry.errors import ConnectionError as FerryConnectionError
-from discord_ferry.migrator.api import get_session
+from discord_ferry.errors import StoatConnectionError
+from discord_ferry.migrator.api import api_fetch_server, get_session
 
 if TYPE_CHECKING:
     from discord_ferry.config import FerryConfig
@@ -32,7 +32,7 @@ async def run_connect(
         on_event: Event callback for progress reporting.
 
     Raises:
-        ConnectionError: If the API is unreachable, the token is invalid,
+        StoatConnectionError: If the API is unreachable, the token is invalid,
             or the Autumn URL cannot be discovered.
     """
     on_event(
@@ -76,6 +76,12 @@ async def run_connect(
             )
         )
 
+        # Step 3: Best-effort permission pre-check on existing server.
+        if config.server_id:
+            await _check_server_permissions(
+                session, config.stoat_url, config.token, config.server_id, on_event
+            )
+
 
 async def _discover_autumn_url(session: aiohttp.ClientSession, stoat_url: str) -> str:
     """GET the Stoat API root to discover the Autumn file server URL."""
@@ -83,22 +89,49 @@ async def _discover_autumn_url(session: aiohttp.ClientSession, stoat_url: str) -
     try:
         async with session.get(url) as response:
             if response.status != 200:
-                raise FerryConnectionError(f"Stoat API returned status {response.status} at {url}")
+                raise StoatConnectionError(f"Stoat API returned status {response.status} at {url}")
             data = await response.json()
     except aiohttp.ClientError as e:
-        raise FerryConnectionError(f"Cannot reach Stoat API at {url}: {e}") from e
+        raise StoatConnectionError(f"Cannot reach Stoat API at {url}: {e}") from e
 
     try:
         autumn_url: str = data["features"]["autumn"]["url"]
     except (KeyError, TypeError) as e:
-        raise FerryConnectionError(
+        raise StoatConnectionError(
             f"Stoat API response missing Autumn URL (features.autumn.url): {e}"
         ) from e
 
     if not autumn_url:
-        raise FerryConnectionError("Stoat API returned empty Autumn URL")
+        raise StoatConnectionError("Stoat API returned empty Autumn URL")
 
     return autumn_url
+
+
+async def _check_server_permissions(
+    session: aiohttp.ClientSession,
+    stoat_url: str,
+    token: str,
+    server_id: str,
+    on_event: EventCallback,
+) -> None:
+    """Best-effort check that the server exists and is accessible."""
+    try:
+        await api_fetch_server(session, stoat_url, token, server_id)
+        on_event(
+            MigrationEvent(
+                phase="connect",
+                status="progress",
+                message=f"Server {server_id} verified accessible",
+            )
+        )
+    except Exception as exc:  # noqa: BLE001
+        on_event(
+            MigrationEvent(
+                phase="connect",
+                status="warning",
+                message=f"Could not verify server {server_id}: {exc}",
+            )
+        )
 
 
 async def _verify_token(session: aiohttp.ClientSession, stoat_url: str, token: str) -> None:
@@ -108,10 +141,10 @@ async def _verify_token(session: aiohttp.ClientSession, stoat_url: str, token: s
     try:
         async with session.get(url, headers=headers) as response:
             if response.status == 401:
-                raise FerryConnectionError("Authentication failed: invalid or expired token")
+                raise StoatConnectionError("Authentication failed: invalid or expired token")
             if response.status != 200:
-                raise FerryConnectionError(
+                raise StoatConnectionError(
                     f"Token verification failed with status {response.status}"
                 )
     except aiohttp.ClientError as e:
-        raise FerryConnectionError(f"Token verification request failed: {e}") from e
+        raise StoatConnectionError(f"Token verification request failed: {e}") from e

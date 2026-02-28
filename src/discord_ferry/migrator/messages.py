@@ -10,6 +10,7 @@ from discord_ferry.migrator.api import api_send_message, get_session
 from discord_ferry.parser.transforms import (
     convert_spoilers,
     flatten_embed,
+    flatten_poll,
     format_original_timestamp,
     handle_stickers,
     remap_emoji,
@@ -38,6 +39,8 @@ _SKIP_TYPES = frozenset(
         "UserPremiumGuildSubscription",
         "GuildMemberJoin",
         "ThreadCreated",
+        "Call",
+        "ChannelIconChange",
     }
 )
 
@@ -307,6 +310,31 @@ async def _process_message(
     # Step 1: Upload attachments (max 5).
     autumn_ids = await _upload_attachments(msg, config, state, session, on_event)
 
+    # Step 1b: Upload sticker images as additional attachments.
+    _, sticker_paths = handle_stickers(msg.stickers, config.export_dir)
+    for sticker_path in sticker_paths:
+        if len(autumn_ids) >= 5:
+            break
+        try:
+            sticker_id = await upload_with_cache(
+                session,
+                state.autumn_url,
+                "attachments",
+                sticker_path,
+                config.token,
+                state.upload_cache,
+                config.upload_delay,
+            )
+            autumn_ids.append(sticker_id)
+            state.attachments_uploaded += 1
+        except Exception as exc:  # noqa: BLE001
+            state.warnings.append(
+                {
+                    "phase": "messages",
+                    "message": f"Sticker upload failed for msg {msg.id}: {exc}",
+                }
+            )
+
     # Step 2: Build and transform content.
     content = _build_content(msg, state)
 
@@ -316,8 +344,29 @@ async def _process_message(
     # Step 4: Flatten embeds (max 5, only those with title or description).
     stoat_embeds: list[dict[str, Any]] = []
     for raw_embed in msg.embeds[:5]:
-        flat = flatten_embed(raw_embed)
+        flat, embed_media_path = flatten_embed(raw_embed, config.export_dir)
         if flat.get("description") or flat.get("title"):
+            # Upload embed media (thumbnail/image) if a local file is available.
+            if embed_media_path is not None:
+                try:
+                    media_id = await upload_with_cache(
+                        session,
+                        state.autumn_url,
+                        "attachments",
+                        embed_media_path,
+                        config.token,
+                        state.upload_cache,
+                        config.upload_delay,
+                    )
+                    flat["media"] = media_id
+                    state.attachments_uploaded += 1
+                except Exception as exc:  # noqa: BLE001
+                    state.warnings.append(
+                        {
+                            "phase": "messages",
+                            "message": f"Embed media upload failed for msg {msg.id}: {exc}",
+                        }
+                    )
             stoat_embeds.append(flat)
 
     # Step 5: Reply references.
@@ -441,8 +490,13 @@ def _build_content(msg: DCEMessage, state: MigrationState) -> str:
     # Prepend original timestamp.
     content = f"{format_original_timestamp(msg.timestamp)} {content}"
 
-    # Append sticker representations.
-    content += handle_stickers(msg.stickers)
+    # Append sticker representations (text only — images uploaded separately).
+    sticker_text, _ = handle_stickers(msg.stickers)
+    content += sticker_text
+
+    # Append poll text if present.
+    if msg.poll is not None:
+        content += "\n" + flatten_poll(msg.poll)
 
     return content
 
@@ -499,6 +553,7 @@ async def _upload_attachments(
                 config.upload_delay,
             )
             autumn_ids.append(autumn_id)
+            state.attachments_uploaded += 1
         except Exception as exc:  # noqa: BLE001
             state.attachments_skipped += 1
             state.warnings.append(

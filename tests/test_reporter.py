@@ -90,6 +90,7 @@ def test_generate_report_counts(tmp_path: Path) -> None:
         category_map={"c1": "sc1", "c2": "sc2", "c3": "sc3"},
         message_map={"m1": "sm1", "m2": "sm2", "m3": "sm3"},
         upload_cache={"file1": "autumn1"},
+        attachments_uploaded=1,
         emoji_map={"e1": "se1"},
         pending_pins=[("ch1", "msg1"), ("ch2", "msg2")],
         reactions_applied=5,
@@ -284,3 +285,33 @@ def test_generate_report_reactions_added(tmp_path: Path) -> None:
     report = generate_report(config, state, exports)
 
     assert report["summary"]["reactions_added"] == 3
+
+
+def test_generate_report_attachments_uploaded_uses_counter(tmp_path: Path) -> None:
+    """attachments_uploaded uses state.attachments_uploaded counter, not upload_cache length."""
+    config = _make_config(tmp_path)
+    state = MigrationState(
+        attachments_uploaded=10,
+        upload_cache={"file1": "autumn1", "file2": "autumn2"},
+    )
+    exports = [_make_export()]
+
+    report = generate_report(config, state, exports)
+
+    # Should use the counter, not len(upload_cache)
+    assert report["summary"]["attachments_uploaded"] == 10
+
+
+def test_generate_report_has_nonzero_duration(tmp_path: Path) -> None:
+    """Report has positive duration when completed_at is set before generate_report."""
+    config = _make_config(tmp_path)
+    state = MigrationState(
+        started_at="2024-01-01T10:00:00+00:00",
+        completed_at="2024-01-01T10:05:00+00:00",
+    )
+    exports = [_make_export()]
+
+    report = generate_report(config, state, exports)
+
+    assert report["completed_at"] != ""
+    assert report["duration_seconds"] == 300

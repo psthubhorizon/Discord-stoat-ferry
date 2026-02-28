@@ -51,7 +51,7 @@ def generate_report(
             "categories_created": len(state.category_map),
             "messages_imported": messages_imported,
             "messages_skipped": messages_skipped,
-            "attachments_uploaded": len(state.upload_cache),
+            "attachments_uploaded": state.attachments_uploaded,
             "attachments_skipped": state.attachments_skipped,
             "emoji_created": len(state.emoji_map),
             "reactions_added": state.reactions_applied,

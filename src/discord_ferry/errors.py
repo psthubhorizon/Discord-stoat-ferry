@@ -9,7 +9,7 @@ class ValidationError(FerryError):
     """Export validation failed."""
 
 
-class ConnectionError(FerryError):
+class StoatConnectionError(FerryError):
     """Stoat API connection failed."""
 
 

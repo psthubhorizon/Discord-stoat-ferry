@@ -11,6 +11,8 @@ from typing import TYPE_CHECKING, Any, TypeVar
 import click
 from dotenv import load_dotenv
 from rich.console import Console
+from rich.live import Live
+from rich.progress import BarColumn, Progress, TextColumn, TimeRemainingColumn
 from rich.table import Table
 
 from discord_ferry.config import FerryConfig
@@ -84,7 +86,7 @@ def _build_validate_table(exports: list[DCEExport]) -> Table:
 
 
 class _ProgressTracker:
-    """Track migration progress and render Rich output."""
+    """Track migration progress and render Rich output with live progress bars."""
 
     def __init__(self, *, verbose: bool = False) -> None:
         self.verbose = verbose
@@ -93,37 +95,105 @@ class _ProgressTracker:
         self.error_count = 0
         self.warning_count = 0
 
+        # Progress bars — created but only started inside the Live context.
+        self._phase_progress = Progress(
+            TextColumn("[bold]{task.description}"),
+            BarColumn(),
+            TextColumn("{task.completed}/{task.total} phases"),
+            transient=True,
+        )
+        self._msg_progress = Progress(
+            TextColumn("  {task.description}"),
+            BarColumn(),
+            TextColumn("{task.completed}/{task.total}"),
+            TimeRemainingColumn(),
+            transient=True,
+        )
+        self._phase_task_id = self._phase_progress.add_task(
+            "Migration", total=len(PHASE_ORDER), completed=0
+        )
+        self._msg_task_id = self._msg_progress.add_task("Messages", total=0, completed=0)
+        self._current_channel = ""
+        self._live: Live | None = None
+
+    def start_live(self) -> Live:
+        """Create and return a Live context for the progress display."""
+        self._live = Live(self._make_display(), console=console, refresh_per_second=4)
+        return self._live
+
+    def _make_display(self) -> Table:
+        """Build a Rich Table combining phase progress, message progress, and stats."""
+        grid = Table.grid(padding=(0, 1))
+        grid.add_row(self._phase_progress)
+        grid.add_row(self._msg_progress)
+        stats = (
+            f"Messages: {self.messages_sent:,}  "
+            f"Errors: {self.error_count}  "
+            f"Warnings: {self.warning_count}"
+        )
+        if self._current_channel:
+            stats += f"  Channel: {self._current_channel}"
+        grid.add_row(stats)
+        return grid
+
+    def _log(self, text: str) -> None:
+        """Print through the Live console if active, otherwise direct."""
+        if self._live is not None:
+            self._live.console.print(text)
+        else:
+            console.print(text)
+
     def on_event(self, event: MigrationEvent) -> None:
-        """Handle a migration event — update state and print to console."""
+        """Handle a migration event — update state and progress bars."""
         self.phase_status[event.phase] = event.status
 
         match event.status:
             case "started":
-                icon = _STATUS_ICONS["started"]
-                console.print(f"[bold cyan][{icon}][/] {event.phase}: {event.message}")
+                self._phase_progress.update(
+                    self._phase_task_id, description=f"Phase: {event.phase}"
+                )
+                self._log(f"[bold cyan][>>][/] {event.phase}: {event.message}")
             case "completed":
-                icon = _STATUS_ICONS["completed"]
-                console.print(f"[bold green][{icon}][/] {event.phase}: {event.message}")
+                completed = sum(1 for s in self.phase_status.values() if s == "completed")
+                self._phase_progress.update(self._phase_task_id, completed=completed)
+                self._log(f"[bold green][OK][/] {event.phase}: {event.message}")
             case "skipped":
-                icon = _STATUS_ICONS["skipped"]
-                console.print(f"[dim][{icon}][/] {event.phase}: {event.message}")
+                self._log(f"[dim][--][/] {event.phase}: {event.message}")
             case "error":
                 self.error_count += 1
-                console.print(f"[bold red][!!][/] {event.phase}: {event.message}")
+                self._log(f"[bold red][!!][/] {event.phase}: {event.message}")
             case "warning":
                 self.warning_count += 1
                 if self.verbose:
-                    console.print(f"[yellow][!!][/] {event.phase}: {event.message}")
+                    self._log(f"[yellow][!!][/] {event.phase}: {event.message}")
             case "progress":
                 if event.total > 0:
                     self.messages_sent = event.current
+                    self._msg_progress.update(
+                        self._msg_task_id,
+                        total=event.total,
+                        completed=event.current,
+                    )
+                if event.channel_name:
+                    self._current_channel = event.channel_name
+                    self._msg_progress.update(
+                        self._msg_task_id,
+                        description=f"  {event.channel_name}",
+                    )
                 if self.verbose:
-                    console.print(f"[dim]    {event.message}[/]")
+                    self._log(f"[dim]    {event.message}[/]")
+
+        # Refresh live display if active.
+        if self._live is not None:
+            self._live.update(self._make_display())
 
     def print_summary(self) -> None:
         """Print a final summary line."""
         console.print()
-        console.print(f"[bold]Done.[/] Errors: {self.error_count}  Warnings: {self.warning_count}")
+        console.print(
+            f"[bold]Done.[/] Messages: {self.messages_sent:,}  "
+            f"Errors: {self.error_count}  Warnings: {self.warning_count}"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -222,7 +292,8 @@ def migrate(**kwargs: Any) -> None:
     console.print("[bold]Discord Ferry[/] — starting migration\n")
 
     try:
-        asyncio.run(run_migration(config, on_event=tracker.on_event))
+        with tracker.start_live():
+            asyncio.run(run_migration(config, on_event=tracker.on_event))
     except MigrationError as exc:
         console.print(f"\n[bold red]Migration failed:[/] {exc}")
         sys.exit(1)

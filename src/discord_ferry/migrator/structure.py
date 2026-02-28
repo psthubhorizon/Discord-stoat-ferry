@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -285,6 +286,30 @@ async def run_roles(
                 )
             )
 
+    # Second pass: set role rank from DCE position (best-effort).
+    ranked_roles = sorted(roles_to_create, key=lambda r: r.position)
+    async with get_session(config) as session:
+        for role in ranked_roles:
+            rank_role_id = state.role_map.get(role.id)
+            if not rank_role_id or role.position == 0:
+                continue
+            try:
+                await api_edit_role(
+                    session,
+                    config.stoat_url,
+                    config.token,
+                    state.stoat_server_id,
+                    rank_role_id,
+                    rank=role.position,
+                )
+            except Exception as exc:  # noqa: BLE001
+                state.warnings.append(
+                    {
+                        "phase": "roles",
+                        "message": (f"Failed to set rank for role '{role.name}': {exc}"),
+                    }
+                )
+
     on_event(
         MigrationEvent(
             phase="roles",
@@ -378,9 +403,11 @@ async def run_channels(
     """
     # Deduplicate exports by channel ID and skip category channels (type 4).
     seen_channel_ids: set[str] = set()
-    # Each entry: (channel, stoat_type, unique_name, discord_category_id, is_thread)
+    # Each entry: (channel, stoat_type, unique_name, effective_category_id, is_thread)
     channels_to_create: list[tuple[DCEChannel, str | None, str, str, bool]] = []
     existing_names: set[str] = set()
+    # Forum categories: forum_cat_key -> forum display name (created lazily).
+    forum_categories: dict[str, str] = {}
 
     for export in exports:
         channel: DCEChannel = export.channel
@@ -414,8 +441,18 @@ async def run_channels(
             ch_name = f"{export.parent_channel_name}-{ch_name}"
 
         unique_name = make_unique_channel_name(ch_name, existing_names)
+
+        # For forum/media channel threads (type 15/16), use a dedicated forum
+        # category keyed by parent name instead of the original Discord category.
+        effective_cat_id = channel.category_id
+        if channel.type in (15, 16) and export.is_thread and export.parent_channel_name:
+            forum_cat_key = f"forum-{export.parent_channel_name}"
+            if forum_cat_key not in forum_categories:
+                forum_categories[forum_cat_key] = export.parent_channel_name
+            effective_cat_id = forum_cat_key
+
         channels_to_create.append(
-            (channel, stoat_type, unique_name, channel.category_id, export.is_thread)
+            (channel, stoat_type, unique_name, effective_cat_id, export.is_thread)
         )
 
     if len(channels_to_create) > config.max_channels:
@@ -446,6 +483,31 @@ async def run_channels(
                 ),
             }
         )
+
+    # Create forum-derived categories (before dry_run check so they get mapped).
+    # These share the /servers rate bucket (5/10s), so add a safety delay.
+    if forum_categories and not config.dry_run:
+        async with get_session(config) as session:
+            for forum_key, forum_name in forum_categories.items():
+                result = await api_create_category(
+                    session,
+                    config.stoat_url,
+                    config.token,
+                    state.stoat_server_id,
+                    forum_name,
+                )
+                state.category_map[forum_key] = result["id"]
+                on_event(
+                    MigrationEvent(
+                        phase="channels",
+                        status="progress",
+                        message=f"Created forum category '{forum_name}'",
+                    )
+                )
+                await asyncio.sleep(2)  # Safety margin for /servers rate bucket.
+    elif forum_categories and config.dry_run:
+        for forum_key in forum_categories:
+            state.category_map[forum_key] = f"dry-cat-{forum_key}"
 
     if config.dry_run:
         for channel, _stoat_type, _unique_name, _discord_cat_id, _is_thread in channels_to_create:

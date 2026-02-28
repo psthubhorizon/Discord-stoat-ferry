@@ -238,6 +238,7 @@ def _parse_message(raw: Any) -> DCEMessage:
     embeds: list[dict[str, object]] = list(raw.get("embeds") or [])
     stickers: list[dict[str, str]] = list(raw.get("stickers") or [])
     mentions: list[dict[str, str]] = list(raw.get("mentions") or [])
+    poll: dict[str, object] | None = raw.get("poll")
 
     return DCEMessage(
         id=str(raw["id"]),
@@ -253,6 +254,7 @@ def _parse_message(raw: Any) -> DCEMessage:
         reactions=reactions,
         mentions=mentions,
         reference=reference,
+        poll=poll,
     )
 
 

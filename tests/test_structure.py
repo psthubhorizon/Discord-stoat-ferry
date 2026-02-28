@@ -580,6 +580,55 @@ def test_make_unique_channel_name_truncated_collision() -> None:
 # ---------------------------------------------------------------------------
 
 
+async def test_run_roles_sets_rank_from_position(tmp_path: Path) -> None:
+    """ROLES phase sets rank on created roles from DCE position data."""
+    events: list[MigrationEvent] = []
+    config = _make_config(tmp_path)
+    state = MigrationState(stoat_server_id="srv1")
+
+    role = DCERole(id="r1", name="Admin", position=3)
+    exports = [_make_export(messages=[_make_message("m1", roles=[role])])]
+
+    rank_bodies: list[dict[str, object]] = []
+
+    with aioresponses() as m:
+        m.post(f"{STOAT_URL}/servers/srv1/roles", payload={"id": "stoat-r1", "name": "Admin"})
+        # Capture the rank PATCH call.
+        m.patch(
+            f"{STOAT_URL}/servers/srv1/roles/stoat-r1",
+            payload={},
+            callback=lambda url, **kwargs: rank_bodies.append(  # type: ignore[misc]
+                kwargs.get("json", {})
+            ),
+        )
+
+        await run_roles(config, state, exports, events.append)
+
+    assert any(b.get("rank") == 3 for b in rank_bodies)
+
+
+async def test_run_roles_rank_failure_is_non_fatal(tmp_path: Path) -> None:
+    """ROLES phase logs a warning and continues if rank setting fails."""
+    events: list[MigrationEvent] = []
+    config = _make_config(tmp_path)
+    state = MigrationState(stoat_server_id="srv1")
+
+    role = DCERole(id="r1", name="Admin", position=2)
+    exports = [_make_export(messages=[_make_message("m1", roles=[role])])]
+
+    with aioresponses() as m:
+        m.post(f"{STOAT_URL}/servers/srv1/roles", payload={"id": "stoat-r1", "name": "Admin"})
+        # Rank PATCH fails.
+        m.patch(f"{STOAT_URL}/servers/srv1/roles/stoat-r1", status=500)
+
+        # Should NOT raise.
+        await run_roles(config, state, exports, events.append)
+
+    assert state.role_map["r1"] == "stoat-r1"
+    rank_warnings = [w for w in state.warnings if "rank" in w["message"].lower()]
+    assert len(rank_warnings) > 0
+
+
 async def test_run_channels_skip_threads(tmp_path: Path) -> None:
     """CHANNELS phase skips thread exports when config.skip_threads is True."""
     events: list[MigrationEvent] = []
@@ -638,6 +687,48 @@ async def test_run_channels_skip_threads_false(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 # Bug 4: 200-channel limit truncation
 # ---------------------------------------------------------------------------
+
+
+async def test_run_channels_forum_threads_get_dedicated_category(tmp_path: Path) -> None:
+    """Forum thread exports (type 15) create a dedicated category named after the forum."""
+    events: list[MigrationEvent] = []
+    config = _make_config(tmp_path)
+    state = MigrationState(stoat_server_id="srv1")
+
+    # Forum thread export (type 15, is_thread=True, parent_channel_name="Questions")
+    exports = [
+        _make_export(
+            channel_id="ft1",
+            channel_name="how-to-install",
+            channel_type=15,
+            is_thread=True,
+            parent_channel_name="Questions",
+            category_id="cat1",
+            category="General",
+        ),
+    ]
+
+    with aioresponses() as m:
+        # Forum category creation.
+        m.post(
+            f"{STOAT_URL}/servers/srv1/categories",
+            payload={"id": "stoat-forum-cat", "title": "Questions"},
+        )
+        # Channel creation.
+        m.post(
+            f"{STOAT_URL}/servers/srv1/channels",
+            payload={"_id": "stoat-ft1", "name": "Questions-how-to-install"},
+        )
+        # Category assignment.
+        m.patch(f"{STOAT_URL}/servers/srv1/categories/stoat-forum-cat", payload={})
+
+        await run_channels(config, state, exports, events.append)
+
+    assert state.channel_map["ft1"] == "stoat-ft1"
+    # The forum category should be in category_map.
+    assert "forum-Questions" in state.category_map
+    messages = _collect_events(events)
+    assert any("forum category" in msg.lower() for msg in messages)
 
 
 async def test_run_channels_truncates_at_200(tmp_path: Path) -> None:

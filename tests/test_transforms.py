@@ -1,8 +1,11 @@
 """Tests for content transformations."""
 
+from pathlib import Path
+
 from discord_ferry.parser.transforms import (
     convert_spoilers,
     flatten_embed,
+    flatten_poll,
     format_original_timestamp,
     handle_stickers,
     remap_emoji,
@@ -211,13 +214,14 @@ def test_flatten_embed_full() -> None:
         ],
         "footer": {"text": "Footer text"},
     }
-    result = flatten_embed(embed)
+    result, media_path = flatten_embed(embed)
 
     assert result["title"] == "My Title"
     assert result["url"] == "https://example.com"
     assert result["colour"] == 16711680
     assert "color" not in result
     assert result["icon_url"] == "https://example.com/icon.png"
+    assert media_path is None  # No export_dir provided.
 
     description = result["description"]
     assert isinstance(description, str)
@@ -232,7 +236,7 @@ def test_flatten_embed_full() -> None:
 
 def test_flatten_embed_color_to_colour() -> None:
     embed: dict[str, object] = {"color": 255}
-    result = flatten_embed(embed)
+    result, _ = flatten_embed(embed)
     assert "colour" in result
     assert result["colour"] == 255
     assert "color" not in result
@@ -240,7 +244,7 @@ def test_flatten_embed_color_to_colour() -> None:
 
 def test_flatten_embed_minimal() -> None:
     embed: dict[str, object] = {"title": "Only Title"}
-    result = flatten_embed(embed)
+    result, _ = flatten_embed(embed)
     assert result["title"] == "Only Title"
     # description should be absent or empty when there's no content to flatten
     assert result.get("description") is None or result.get("description") == ""
@@ -248,7 +252,7 @@ def test_flatten_embed_minimal() -> None:
 
 def test_flatten_embed_empty() -> None:
     embed: dict[str, object] = {}
-    result = flatten_embed(embed)
+    result, _ = flatten_embed(embed)
     # No keys with None values
     for v in result.values():
         assert v is not None
@@ -256,7 +260,7 @@ def test_flatten_embed_empty() -> None:
 
 def test_flatten_embed_no_author_icon() -> None:
     embed: dict[str, object] = {"author": {"name": "Just Name"}}
-    result = flatten_embed(embed)
+    result, _ = flatten_embed(embed)
     assert "icon_url" not in result or result["icon_url"] is None
 
 
@@ -267,12 +271,35 @@ def test_flatten_embed_fields_order() -> None:
         "fields": [{"name": "F1", "value": "V1"}],
         "footer": {"text": "Foot"},
     }
-    result = flatten_embed(embed)
+    result, _ = flatten_embed(embed)
     desc = str(result["description"])
     # Author before description before fields before footer
     assert desc.index("**Auth**") < desc.index("Desc")
     assert desc.index("Desc") < desc.index("**F1:**")
     assert desc.index("**F1:**") < desc.index("_Foot_")
+
+
+def test_flatten_embed_with_local_thumbnail(tmp_path: Path) -> None:
+    """flatten_embed returns media path when thumbnail is a local file."""
+    thumb_file = tmp_path / "thumb.png"
+    thumb_file.write_bytes(b"PNG")
+    embed: dict[str, object] = {
+        "title": "With Thumb",
+        "thumbnail": {"url": "thumb.png"},
+    }
+    result, media_path = flatten_embed(embed, export_dir=tmp_path)
+    assert result["title"] == "With Thumb"
+    assert media_path == thumb_file
+
+
+def test_flatten_embed_with_remote_thumbnail() -> None:
+    """flatten_embed returns no media path when thumbnail is a remote URL."""
+    embed: dict[str, object] = {
+        "title": "Remote",
+        "thumbnail": {"url": "https://cdn.discord.com/thumb.png"},
+    }
+    result, media_path = flatten_embed(embed, export_dir=Path("/tmp"))
+    assert media_path is None
 
 
 # ---------------------------------------------------------------------------
@@ -303,26 +330,79 @@ def test_format_timestamp_with_microseconds() -> None:
 
 def test_handle_stickers_single() -> None:
     stickers = [{"name": "wave"}]
-    result = handle_stickers(stickers)
-    assert "[Sticker: wave]" in result
+    text, paths = handle_stickers(stickers)
+    assert "[Sticker: wave]" in text
+    assert paths == []
 
 
 def test_handle_stickers_multiple() -> None:
     stickers = [{"name": "wave"}, {"name": "tada"}]
-    result = handle_stickers(stickers)
-    assert "[Sticker: wave]" in result
-    assert "[Sticker: tada]" in result
+    text, _ = handle_stickers(stickers)
+    assert "[Sticker: wave]" in text
+    assert "[Sticker: tada]" in text
 
 
 def test_handle_stickers_empty() -> None:
-    result = handle_stickers([])
-    assert result == ""
+    text, paths = handle_stickers([])
+    assert text == ""
+    assert paths == []
 
 
 def test_handle_stickers_no_name() -> None:
-    stickers = [{}]
-    result = handle_stickers(stickers)
-    assert "[Sticker: unknown]" in result
+    stickers: list[dict[str, str]] = [{}]
+    text, _ = handle_stickers(stickers)
+    assert "[Sticker: unknown]" in text
+
+
+def test_handle_stickers_with_local_image(tmp_path: Path) -> None:
+    """Sticker with a local sourceUrl returns the image path."""
+    sticker_file = tmp_path / "sticker.png"
+    sticker_file.write_bytes(b"PNG")
+    stickers = [{"name": "wave", "sourceUrl": "sticker.png"}]
+    text, paths = handle_stickers(stickers, export_dir=tmp_path)
+    assert "[Sticker: wave]" in text
+    assert paths == [sticker_file]
+
+
+def test_handle_stickers_remote_url_no_path() -> None:
+    """Sticker with a remote sourceUrl returns no image path."""
+    stickers = [{"name": "wave", "sourceUrl": "https://cdn.discord.com/sticker.png"}]
+    text, paths = handle_stickers(stickers, export_dir=Path("/tmp"))
+    assert "[Sticker: wave]" in text
+    assert paths == []
+
+
+# ---------------------------------------------------------------------------
+# flatten_poll
+# ---------------------------------------------------------------------------
+
+
+def test_flatten_poll_basic() -> None:
+    """Poll renders question and options with vote counts."""
+    poll = {
+        "question": {"text": "Favourite colour?"},
+        "answers": [
+            {"text": "Red", "votes": 42},
+            {"text": "Blue", "votes": 18},
+        ],
+    }
+    result = flatten_poll(poll)
+    assert "**Poll: Favourite colour?**" in result
+    assert "\u2022 Red \u2014 42 votes" in result
+    assert "\u2022 Blue \u2014 18 votes" in result
+
+
+def test_flatten_poll_empty() -> None:
+    """Empty poll dict renders minimal output."""
+    result = flatten_poll({})
+    assert "**Poll: **" in result
+
+
+def test_flatten_poll_string_question() -> None:
+    """Poll with string question (not dict) still works."""
+    poll = {"question": "Simple?", "answers": []}
+    result = flatten_poll(poll)
+    assert "**Poll: Simple?**" in result
 
 
 # ---------------------------------------------------------------------------

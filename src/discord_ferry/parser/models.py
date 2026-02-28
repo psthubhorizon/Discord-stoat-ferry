@@ -1,6 +1,7 @@
 """Dataclasses for parsed DCE export data."""
 
 from dataclasses import dataclass, field
+from typing import Any
 
 
 @dataclass
@@ -81,6 +82,7 @@ class DCEMessage:
     reactions: list[DCEReaction] = field(default_factory=list)
     mentions: list[dict[str, str]] = field(default_factory=list)
     reference: DCEReference | None = None
+    poll: dict[str, Any] | None = None
 
 
 @dataclass

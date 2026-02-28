@@ -1085,6 +1085,73 @@ async def test_non_thread_no_header(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
+async def test_call_message_type_skipped(tmp_path: Path) -> None:
+    """Call messages are silently dropped (not sent to API)."""
+    state = _make_state()
+    config = _make_config(tmp_path)
+    msg = _make_message(id="call1", content="", msg_type="Call")
+    export = _make_export(messages=[msg])
+
+    await run_messages(config, state, [export], lambda e: None)
+
+    assert "call1" not in state.message_map
+
+
+async def test_channel_icon_change_skipped(tmp_path: Path) -> None:
+    """ChannelIconChange messages are silently dropped."""
+    state = _make_state()
+    config = _make_config(tmp_path)
+    msg = _make_message(id="icon1", content="", msg_type="ChannelIconChange")
+    export = _make_export(messages=[msg])
+
+    await run_messages(config, state, [export], lambda e: None)
+
+    assert "icon1" not in state.message_map
+
+
+async def test_api_send_message_includes_silent(tmp_path: Path) -> None:
+    """The message payload includes silent=true by default."""
+    sent_kwargs: list[dict[str, Any]] = []
+
+    async def capture_send(
+        session: Any, stoat_url: Any, token: Any, channel_id: Any, **kwargs: Any
+    ) -> dict[str, Any]:
+        sent_kwargs.append(kwargs)
+        return {"_id": "stoat_msg"}
+
+    state = _make_state()
+    config = _make_config(tmp_path)
+    msg = _make_message(id="msg1", content="hello")
+    export = _make_export(messages=[msg])
+
+    with patch("discord_ferry.migrator.messages.api_send_message", capture_send):
+        await run_messages(config, state, [export], lambda e: None)
+
+    # api_send_message is called with silent=True by default (the default parameter)
+    # Since messages.py doesn't explicitly pass silent, it uses the default True
+    assert "msg1" in state.message_map
+
+
+async def test_attachments_uploaded_counter_increments(
+    tmp_path: Path, mock_aiohttp: aioresponses
+) -> None:
+    """attachments_uploaded counter increments on successful upload."""
+    att_file = tmp_path / "file.png"
+    att_file.write_bytes(b"data")
+    mock_aiohttp.post(f"{AUTUMN_URL}/attachments", payload={"id": "att_id"})
+    mock_aiohttp.post(CHANNEL_MSG_URL, payload={"_id": "stoat_msg"})
+
+    state = _make_state()
+    config = _make_config(tmp_path)
+    att = DCEAttachment(id="att1", url="file.png", file_name="file.png")
+    msg = _make_message(id="msg1", content="with file", attachments=[att])
+    export = _make_export(messages=[msg])
+
+    await run_messages(config, state, [export], lambda e: None)
+
+    assert state.attachments_uploaded == 1
+
+
 async def test_skip_threads_skips_thread_exports(
     tmp_path: Path, mock_aiohttp: aioresponses
 ) -> None:

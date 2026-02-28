@@ -255,6 +255,44 @@ async def test_api_send_message_excludes_none_fields(mock_aiohttp: aioresponses)
     assert "replies" not in captured_body
 
 
+async def test_api_send_message_includes_silent_by_default(mock_aiohttp: aioresponses) -> None:
+    """api_send_message includes silent=true in the payload by default."""
+    captured_body: dict[str, object] = {}
+
+    def capture_callback(url: object, **kwargs: object) -> None:
+        body = kwargs.get("json") or {}
+        captured_body.update(body)  # type: ignore[arg-type]
+
+    mock_aiohttp.post(
+        f"{BASE_URL}/channels/ch1/messages",
+        payload={"_id": "msg1"},
+        callback=capture_callback,
+    )
+    async with aiohttp.ClientSession() as session:
+        await api_send_message(session, BASE_URL, TOKEN, "ch1", content="Hello")
+
+    assert captured_body.get("silent") is True
+
+
+async def test_api_send_message_silent_false_omits_field(mock_aiohttp: aioresponses) -> None:
+    """api_send_message with silent=False omits the silent field from payload."""
+    captured_body: dict[str, object] = {}
+
+    def capture_callback(url: object, **kwargs: object) -> None:
+        body = kwargs.get("json") or {}
+        captured_body.update(body)  # type: ignore[arg-type]
+
+    mock_aiohttp.post(
+        f"{BASE_URL}/channels/ch1/messages",
+        payload={"_id": "msg1"},
+        callback=capture_callback,
+    )
+    async with aiohttp.ClientSession() as session:
+        await api_send_message(session, BASE_URL, TOKEN, "ch1", content="Hello", silent=False)
+
+    assert "silent" not in captured_body
+
+
 # ---------------------------------------------------------------------------
 # api_add_reaction
 # ---------------------------------------------------------------------------
