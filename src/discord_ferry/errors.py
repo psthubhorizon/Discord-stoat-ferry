@@ -23,3 +23,19 @@ class MigrationError(FerryError):
 
 class StateError(FerryError):
     """State file read/write error."""
+
+
+class ExportError(MigrationError):
+    """Error during DCE export phase."""
+
+
+class DCENotFoundError(ExportError):
+    """DCE binary not found and download failed."""
+
+
+class DotNetMissingError(ExportError):
+    """Required .NET runtime not detected."""
+
+
+class DiscordAuthError(ExportError):
+    """Discord token validation failed."""
