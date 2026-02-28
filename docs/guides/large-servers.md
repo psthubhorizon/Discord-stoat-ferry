@@ -77,7 +77,7 @@ Stoat allows a maximum of 200 channels per server by default. Discord servers wi
 
 **Options:**
 
-- **Skip threads** — use `--skip-threads` (CLI) to omit all thread and forum content. This keeps you within the channel limit but loses threaded conversations.
+- **Skip threads** — use `--skip-threads` (CLI) or the **Skip threads** checkbox (GUI) to omit all thread and forum content. This keeps you within the channel limit but loses threaded conversations.
 - **Raise the limit** — on a self-hosted instance, increase `server_channels` in your configuration. See [Self-Hosted Stoat Tips](self-hosted-tips.md). If your self-hosted instance has a raised limit, pass `--max-channels N` to Ferry so it respects the higher ceiling.
 
 !!! tip "Check before you start"
@@ -99,7 +99,7 @@ If emoji fidelity matters, raise the `server_emoji` limit on a self-hosted insta
     The Migrate screen shows a live phase indicator, per-channel progress bar, running totals, and a scrolling log. Leave the browser tab open and check back periodically.
 
 === "CLI"
-    The default CLI output shows one line per channel. Add `--verbose` for a line per message — useful for debugging but very noisy on large servers. For truly unattended runs, redirect output to a log file:
+    The CLI shows a live Rich dashboard with a phase progress bar, a per-channel message progress bar with ETA, and running stats (messages sent, errors, warnings, current channel). Add `--verbose` for a line per message — useful for debugging but very noisy on large servers. For truly unattended runs, redirect output to a log file:
 
     ```bash
     ferry migrate ~/exports/my-discord-server/ \

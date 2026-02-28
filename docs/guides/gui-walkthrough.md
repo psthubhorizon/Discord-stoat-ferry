@@ -41,6 +41,7 @@ Click **Advanced Options** to expand the following settings. Defaults are safe f
 | Skip messages | Off | Import server structure only (channels, roles, categories). No messages will be sent. |
 | Skip emoji | Off | Do not upload custom emoji. |
 | Skip reactions | Off | Do not add message reactions. |
+| Skip threads | Off | Do not migrate threads or forum posts. Useful when approaching the 200-channel limit. |
 | Dry run (no API calls) | Off | Run all migration phases without making any API calls. Useful for validating structure mapping before committing to a full migration. |
 | Existing server ID | *(empty)* | Paste a Stoat server ID to migrate into a server you have already created, rather than creating a new one. |
 

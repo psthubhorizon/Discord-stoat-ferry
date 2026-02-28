@@ -92,7 +92,7 @@ If you have already created an empty server in Stoat and want Ferry to populate 
 To find your server's ID, open it in Stoat, go to **Server Settings**, and look for a field labelled **Server ID** (it is a short alphanumeric string). Pass it to Ferry with the `--server-id` option.
 
 !!! info "Using `--server-id` with a non-owner account"
-    If the account running Ferry did not create the server, make sure it has been given a role with all required permissions before you start. See the next section for the list.
+    If the account running Ferry did not create the server, make sure it has been given a role with all required permissions before you start. See the next section for the list. Ferry will verify the server is accessible during the CONNECT phase and warn you if it cannot reach it.
 
 ---
 

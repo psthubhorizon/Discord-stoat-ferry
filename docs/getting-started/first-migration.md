@@ -59,7 +59,8 @@ Before you start, confirm you have all three of these ready:
         Expand the **Advanced Options** section if you need to:
 
         - Adjust the rate limit delay (default 1.0 second between messages — increase if you see rate limit warnings)
-        - Skip specific phases: emoji, messages, or reactions
+        - Skip specific phases: emoji, messages, reactions, or threads/forum posts
+        - Run a dry run to validate structure mapping without making API calls
         - Migrate into an existing Stoat server instead of creating a new one
 
 === "CLI (Linux / advanced)"
@@ -79,6 +80,7 @@ Before you start, confirm you have all three of these ready:
     | `--skip-messages` | Import structure only, no messages |
     | `--skip-emoji` | Do not migrate custom emoji |
     | `--skip-reactions` | Do not migrate message reactions |
+    | `--skip-threads` | Do not migrate threads or forum posts |
     | `--rate-limit 2.0` | Set seconds between messages (default `1.0`) |
     | `--server-id EXISTING_ID` | Migrate into an existing Stoat server |
     | `--dry-run` | Run all phases without making any API calls |
@@ -184,11 +186,16 @@ Ferry checks your export files locally before making any API calls. Nothing is s
 After a successful migration:
 
 - All channels and categories are created in the same structure as Discord
-- Roles and their permissions are recreated
+- Forum posts are grouped into dedicated categories named after the parent forum
+- Roles are recreated with colours and rank ordering preserved
 - Messages appear under the original author's name (using Stoat's masquerade feature)
 - Original timestamps appear at the start of each message: `*[2024-01-15 14:30 UTC]*`
+- Embeds are preserved with uploaded thumbnails and images
+- Polls are rendered as formatted text in the message body
+- Sticker images are uploaded as attachments (with text fallback for unsupported formats)
 - Pinned messages are re-pinned in their channels
 - Custom emoji are available in the server
+- All messages are sent silently (no notification spam during migration)
 
 !!! info "Why do messages show a timestamp at the start?"
     Stoat does not support importing historical message timestamps. Ferry embeds the original date and time as the first line of each message so the conversation history stays readable.

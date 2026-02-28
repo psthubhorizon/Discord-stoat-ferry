@@ -45,10 +45,12 @@ Ferry can **pause and resume** — close it anytime and pick up where you left o
 | Pinned messages | Supported |
 | Replies | Supported |
 | Reactions | Supported (without per-user attribution) |
+| Embeds (with media) | Supported (thumbnails and images uploaded) |
+| Polls | Supported (rendered as formatted text) |
 | Threads | Supported (converted to text channels) |
-| Forum posts | Supported (converted to text channels) |
+| Forum posts | Supported (grouped into dedicated categories) |
 | Voice channels | Partial (created but may not function — Stoat bug) |
-| Stickers | Text placeholder only |
+| Stickers | Image upload with text fallback for Lottie/missing |
 | Original timestamps | Shown in message text, not metadata |
 
 ---

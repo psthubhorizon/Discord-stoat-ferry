@@ -54,13 +54,13 @@ and resumed, a completed phase is skipped entirely.
 | # | Phase | What it does |
 |---|-------|-------------|
 | 1 | **VALIDATE** | Parse all DCE JSON files, verify media was downloaded, detect format issues |
-| 2 | **CONNECT** | Test Stoat API credentials, resolve Autumn upload URL, verify bot permissions |
+| 2 | **CONNECT** | Test Stoat API credentials, resolve Autumn upload URL, verify server accessibility (if using `--server-id`) |
 | 3 | **SERVER** | Create a new Stoat server or attach to an existing one |
-| 4 | **ROLES** | Create roles with colours (British spelling) and permission bitmasks |
+| 4 | **ROLES** | Create roles with colours (British spelling), then set rank ordering from Discord position data |
 | 5 | **CATEGORIES** | Create category structure on the server |
-| 6 | **CHANNELS** | Create channels, assign to categories, flatten threads and forums to text channels |
+| 6 | **CHANNELS** | Create channels, assign to categories, flatten threads to text channels, group forum threads into dedicated categories |
 | 7 | **EMOJI** | Download Discord emoji, upload to Autumn, register on Stoat server |
-| 8 | **MESSAGES** | Import messages with masquerade, attachments, mention remapping, and reply threading |
+| 8 | **MESSAGES** | Import messages with masquerade, attachments, embeds (with media), stickers, polls, mention remapping, and reply threading |
 | 9 | **REACTIONS** | Re-apply emoji reactions to migrated messages |
 | 10 | **PINS** | Re-pin messages that were pinned in Discord |
 | 11 | **REPORT** | Write a markdown migration report summarising counts, skips, and errors |
@@ -87,7 +87,7 @@ needs across phases:
 - **Logs** — `errors`, `warnings` (structured dicts with phase, context, and message)
 - **Server** — `stoat_server_id`, `autumn_url`
 - **Resume tracking** — `current_phase` (string), `last_completed_channel`, `last_completed_message`
-- **Counters** — `attachments_skipped`, `reactions_applied`, `pins_applied`
+- **Counters** — `attachments_uploaded`, `attachments_skipped`, `reactions_applied`, `pins_applied`
 - **Timing** — `started_at`, `completed_at`
 - **Flags** — `is_dry_run`
 
@@ -122,8 +122,8 @@ finer-grained resume; messages already sent are deduplicated via the `nonce` fie
 | `src/discord_ferry/state.py` | `MigrationState` dataclass and JSON serialisation |
 | `src/discord_ferry/config.py` | `FerryConfig` dataclass — all user-supplied settings |
 | `src/discord_ferry/errors.py` | Custom exception hierarchy |
-| `src/discord_ferry/transforms.py` | Mention remapping, text sanitisation |
-| `src/discord_ferry/migrator/reporter.py` | Migration report generation |
+| `src/discord_ferry/parser/transforms.py` | Mention/emoji remapping, embed flattening, poll/sticker rendering |
+| `src/discord_ferry/reporter.py` | Migration report generation |
 | `src/discord_ferry/gui.py` | NiceGUI shell — 3-screen workflow |
 | `src/discord_ferry/cli.py` | Click shell — `migrate` and `validate` commands |
 

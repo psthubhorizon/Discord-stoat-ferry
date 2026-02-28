@@ -85,11 +85,13 @@ DCE exports the Discord channel type as a string name. Ferry maps these to Stoat
 | `GUILD_ANNOUNCEMENT` | 5 | TextChannel | Treated as text |
 | `PUBLIC_THREAD` | 11 | TextChannel (flatten) | Becomes a standalone text channel |
 | `PRIVATE_THREAD` | 12 | TextChannel (flatten) | Becomes a standalone text channel |
-| `GUILD_FORUM` | 15 | TextChannel(s) per thread | One text channel per exported forum thread |
-| `GUILD_MEDIA` | 16 | TextChannel(s) per thread | One text channel per exported media thread |
+| `GUILD_FORUM` | 15 | TextChannel(s) per thread | One text channel per thread, grouped in a category named after the forum |
+| `GUILD_MEDIA` | 16 | TextChannel(s) per thread | One text channel per thread, grouped in a category named after the media channel |
 
 Stoat has exactly five channel types: SavedMessages, DirectMessage, Group, TextChannel, VoiceChannel.
 There are no native threads or forums, so Discord threads are flattened into regular text channels.
+Forum and media channel threads are grouped into dedicated Stoat categories named after the parent
+forum, preserving the organisational structure.
 
 ---
 
@@ -110,6 +112,8 @@ matches on these strings:
 | `"UserPremiumGuildSubscription"` | Skip (boost notification) |
 | `"ThreadCreated"` | Skip (thread header injected by Ferry instead) |
 | `"ThreadStarterMessage"` | Import as the first message in the thread |
+| `"Call"` | Skip |
+| `"ChannelIconChange"` | Skip |
 
 Unknown type strings are logged as warnings and the message is skipped.
 
@@ -142,6 +146,16 @@ Unknown type strings are logged as warnings and the message is skipped.
   "mentions": [
     { "id": "...", "name": "Bob" }
   ],
+  "stickers": [
+    { "name": "wave", "sourceUrl": "media/stickers/wave.png" }
+  ],
+  "poll": {
+    "question": { "text": "Favourite colour?" },
+    "answers": [
+      { "text": "Red", "votes": 12 },
+      { "text": "Blue", "votes": 8 }
+    ]
+  },
   "reference": null,
   "isPinned": false
 }
@@ -149,6 +163,14 @@ Unknown type strings are logged as warnings and the message is skipped.
 
 When `--media` is used, `avatarUrl` and `attachment.url` are relative paths within the export
 directory (e.g. `media/attachments/image.png`). Ferry resolves these relative to the export root.
+
+**Stickers**: If `sourceUrl` is a local relative path (downloaded via `--media`), Ferry uploads the
+image as a message attachment. Lottie stickers and missing files fall back to a text placeholder
+like `[Sticker: wave]`.
+
+**Polls**: Ferry renders poll data as formatted text in the message body (Stoat has no native poll
+support). The output looks like: `**Poll: Favourite colour?**` followed by bullet-pointed options
+with vote counts.
 
 ---
 
