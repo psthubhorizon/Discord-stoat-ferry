@@ -60,6 +60,9 @@ class MigrationState:
     # Dry-run flag — persisted so resume logic can reject dry-run states
     is_dry_run: bool = False
 
+    # Export phase tracking (for smart resume)
+    export_completed: bool = False
+
 
 def save_state(state: MigrationState, output_dir: Path) -> None:
     """Save migration state to state.json using atomic write.
@@ -121,6 +124,7 @@ def _state_to_dict(state: MigrationState) -> dict[str, Any]:
         "started_at": state.started_at,
         "completed_at": state.completed_at,
         "is_dry_run": state.is_dry_run,
+        "export_completed": state.export_completed,
     }
 
 
@@ -151,6 +155,7 @@ def _dict_to_state(data: dict[str, Any]) -> MigrationState:
             started_at=data.get("started_at", ""),
             completed_at=data.get("completed_at", ""),
             is_dry_run=data.get("is_dry_run", False),
+            export_completed=data.get("export_completed", False),
         )
     except (TypeError, ValueError) as e:
         raise StateError(f"Invalid state data: {e}") from e

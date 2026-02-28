@@ -118,3 +118,28 @@ def test_load_state_missing_newer_fields(tmp_path: Path) -> None:
     assert loaded.is_dry_run is False
     assert loaded.pending_pins == []
     assert loaded.pending_reactions == []
+
+
+def test_export_completed_default_false() -> None:
+    """New states default export_completed to False."""
+    state = MigrationState()
+    assert state.export_completed is False
+
+
+def test_export_completed_round_trip(tmp_path: Path) -> None:
+    """export_completed survives save/load cycle."""
+    state = MigrationState()
+    state.export_completed = True
+    save_state(state, tmp_path)
+    loaded = load_state(tmp_path)
+    assert loaded.export_completed is True
+
+
+def test_load_old_state_without_export_completed(tmp_path: Path) -> None:
+    """Loading a state.json from before this field was added defaults to False."""
+    import json
+
+    old_data = {"role_map": {}, "channel_map": {}}  # minimal old state
+    (tmp_path / "state.json").write_text(json.dumps(old_data))
+    loaded = load_state(tmp_path)
+    assert loaded.export_completed is False
