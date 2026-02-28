@@ -83,6 +83,7 @@ def parse_single_export(json_path: Path) -> DCEExport:
         exported_at=str(raw.get("exportedAt", "")),
         is_thread=is_thread,
         parent_channel_name=parent_channel_name,
+        json_path=json_path,
     )
 
 

@@ -343,6 +343,34 @@ def test_parse_forwarded_message(fixtures_dir: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Task 4: json_path field on DCEExport
+# ---------------------------------------------------------------------------
+
+
+def test_dce_export_has_json_path() -> None:
+    """DCEExport includes json_path field for streaming parser."""
+    from discord_ferry.parser.models import DCEChannel, DCEExport, DCEGuild
+
+    export = DCEExport(
+        guild=DCEGuild(id="1", name="Test"),
+        channel=DCEChannel(id="2", type=0, name="general"),
+        json_path=Path("/tmp/test.json"),
+    )
+    assert export.json_path == Path("/tmp/test.json")
+
+
+def test_dce_export_json_path_defaults_to_none() -> None:
+    """json_path defaults to None for backward compatibility."""
+    from discord_ferry.parser.models import DCEChannel, DCEExport, DCEGuild
+
+    export = DCEExport(
+        guild=DCEGuild(id="1", name="Test"),
+        channel=DCEChannel(id="2", type=0, name="general"),
+    )
+    assert export.json_path is None
+
+
 def test_validate_counts_emoji_from_content(tmp_path: Path) -> None:
     """validate_export counts custom emoji in message content, not just reactions."""
     temp_dir = tmp_path / "exports"

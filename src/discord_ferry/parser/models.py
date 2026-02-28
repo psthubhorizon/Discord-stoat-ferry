@@ -1,6 +1,7 @@
 """Dataclasses for parsed DCE export data."""
 
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 
@@ -117,3 +118,4 @@ class DCEExport:
     exported_at: str = ""
     is_thread: bool = False
     parent_channel_name: str = ""
+    json_path: Path | None = None
