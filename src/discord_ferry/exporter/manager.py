@@ -24,7 +24,6 @@ DCE_VERSION = "2.46.1"
 # Map (system, machine) to DCE release asset suffix.
 _PLATFORM_MAP: dict[tuple[str, str], str] = {
     ("Windows", "AMD64"): "win-x64",
-    ("Windows", "x86"): "win-x64",
     ("Linux", "x86_64"): "linux-x64",
     ("Linux", "aarch64"): "linux-arm64",
     ("Darwin", "x86_64"): "osx-x64",
@@ -34,6 +33,8 @@ _PLATFORM_MAP: dict[tuple[str, str], str] = {
 _GITHUB_RELEASE_URL = (
     "https://api.github.com/repos/Tyrrrz/DiscordChatExporter/releases/tags/v{version}"
 )
+
+_MAX_DCE_BYTES = 150 * 1024 * 1024  # 150 MB hard ceiling
 
 
 def _get_dce_dir() -> Path:
@@ -64,7 +65,7 @@ def detect_dotnet() -> bool:
         )
         if result.returncode != 0:
             return False
-        version_str = result.stdout.strip()
+        version_str = result.stdout.strip().split("-")[0]  # strip pre-release suffix
         major = int(version_str.split(".")[0])
         return major >= 8
     except (FileNotFoundError, ValueError, subprocess.TimeoutExpired):
@@ -137,6 +138,10 @@ async def download_dce(on_event: EventCallback) -> Path:
                 if resp.status != 200:
                     raise DCENotFoundError(f"Failed to download {asset_name}: HTTP {resp.status}")
                 data = await resp.read()
+                if len(data) > _MAX_DCE_BYTES:
+                    raise DCENotFoundError(
+                        f"DCE download unexpectedly large ({len(data)} bytes); aborting"
+                    )
 
     except aiohttp.ClientError as e:
         raise DCENotFoundError(f"Network error downloading DCE: {e}") from e
@@ -144,6 +149,12 @@ async def download_dce(on_event: EventCallback) -> Path:
     dce_dir.mkdir(parents=True, exist_ok=True)
     try:
         with zipfile.ZipFile(io.BytesIO(data)) as zf:
+            for member in zf.infolist():
+                member_path = (dce_dir / member.filename).resolve()
+                if not str(member_path).startswith(str(dce_dir.resolve())):
+                    raise DCENotFoundError(
+                        f"Zip entry {member.filename!r} would extract outside target directory"
+                    )
             zf.extractall(dce_dir)
     except zipfile.BadZipFile as e:
         raise DCENotFoundError(f"Downloaded file is not a valid zip: {e}") from e

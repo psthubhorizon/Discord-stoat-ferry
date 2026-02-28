@@ -70,6 +70,14 @@ class TestGetAssetName:
         ):
             _get_asset_name()
 
+    def test_windows_x86_raises(self):
+        with (
+            patch("platform.system", return_value="Windows"),
+            patch("platform.machine", return_value="x86"),
+            pytest.raises(ValueError, match="Unsupported"),
+        ):
+            _get_asset_name()
+
 
 class TestDetectDotnet:
     def test_windows_always_true(self):
