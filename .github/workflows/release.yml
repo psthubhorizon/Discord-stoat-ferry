@@ -28,10 +28,10 @@ jobs:
           cache-dependency-glob: "uv.lock"
 
       - name: Install dependencies
-        run: uv sync --locked --extra native --dev
+        run: uv sync --locked --extra native --extra dev
 
       - name: Build executable
-        run: uv run pyinstaller ferry.spec
+        run: uv run --extra dev pyinstaller ferry.spec
 
       - name: Rename artifact
         run: mv dist/Ferry.exe dist/Ferry-windows-x86_64.exe
@@ -57,10 +57,10 @@ jobs:
           cache-dependency-glob: "uv.lock"
 
       - name: Install dependencies
-        run: uv sync --locked --extra native --dev
+        run: uv sync --locked --extra native --extra dev
 
       - name: Build executable
-        run: uv run pyinstaller ferry.spec
+        run: uv run --extra dev pyinstaller ferry.spec
 
       - name: Zip .app bundle
         run: cd dist && zip -r ../Ferry-macos-arm64.zip Ferry.app
