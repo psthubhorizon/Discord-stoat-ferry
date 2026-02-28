@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 200" width="400" height="200">
+  <defs>
+    <linearGradient id="water" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#3b82f6" stop-opacity="0.6"/>
+      <stop offset="100%" stop-color="#6366f1" stop-opacity="0.6"/>
+    </linearGradient>
+  </defs>
+  <!-- Hull -->
+  <path d="M60 130 L80 160 L240 160 L260 130 Z" fill="#1e293b"/>
+  <!-- Cabin -->
+  <rect x="100" y="95" width="120" height="35" rx="4" fill="#334155"/>
+  <!-- Smokestack -->
+  <rect x="190" y="65" width="20" height="30" rx="2" fill="#475569"/>
+  <!-- Smoke puff -->
+  <circle cx="200" cy="55" r="8" fill="#94a3b8" opacity="0.5"/>
+  <circle cx="210" cy="45" r="6" fill="#94a3b8" opacity="0.3"/>
+  <!-- Waves -->
+  <path d="M30 155 Q70 145 110 155 Q150 165 190 155 Q230 145 270 155 Q310 165 350 155"
+        fill="none" stroke="url(#water)" stroke-width="3" stroke-linecap="round"/>
+  <path d="M20 170 Q60 160 100 170 Q140 180 180 170 Q220 160 260 170 Q300 180 340 170 Q360 163 380 170"
+        fill="none" stroke="url(#water)" stroke-width="2" stroke-linecap="round" opacity="0.5"/>
+  <!-- Text -->
+  <text x="300" y="130" font-family="system-ui, -apple-system, sans-serif"
+        font-size="36" font-weight="700" fill="#1e293b" text-anchor="middle">Ferry</text>
+  <text x="300" y="152" font-family="system-ui, -apple-system, sans-serif"
+        font-size="12" fill="#64748b" text-anchor="middle">Discord → Stoat</text>
+</svg>
