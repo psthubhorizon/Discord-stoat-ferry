@@ -8,22 +8,29 @@
 
 **Tech Stack:** Click (CLI), NiceGUI (GUI), aiohttp (download retry), pytest + aioresponses (tests)
 
+**Codebase context:**
+- CLI entry: `src/discord_ferry/cli.py` — Click group with `migrate` and `validate` commands
+- GUI entry: `src/discord_ferry/gui.py` — NiceGUI pages at `/`, `/export`, `/validate`, `/migrate`
+- DCE downloader: `src/discord_ferry/exporter/manager.py` — `download_dce()` async function
+- Test pattern: pytest + `aioresponses` for HTTP mocking, `unittest.mock.patch` for subprocess/filesystem
+- Verify command: `uv run ruff check . && uv run ruff format --check . && uv run mypy src/ && uv run pytest`
+
 ---
 
 ### Task 1: CLI ToS Disclaimer (G1)
 
 **Files:**
-- Modify: `src/discord_ferry/cli.py:203-240` (add `--yes` option)
-- Modify: `src/discord_ferry/cli.py:314-340` (add confirm prompt in `migrate`)
+- Modify: `src/discord_ferry/cli.py:203-240` (add `--yes` to `_common_options`)
+- Modify: `src/discord_ferry/cli.py:314-340` (add confirm prompt in `migrate` command)
 - Test: `tests/test_cli.py`
 
 **Step 1: Write the failing tests**
 
-Add three tests to `tests/test_cli.py`:
+Add three tests to `tests/test_cli.py`. Place them after the existing `test_migrate_neither_mode` test (end of the orchestrated mode section). They use the same `_make_mock_engine`, `runner`, `main`, `FIXTURES_DIR`, and `patch` imports already in the file.
 
 ```python
 def test_migrate_orchestrated_prompts_tos(runner: CliRunner) -> None:
-    """Orchestrated mode prompts for ToS confirmation."""
+    """Orchestrated mode prompts for ToS confirmation; declining exits 1."""
     mock_engine = _make_mock_engine()
     with patch("discord_ferry.cli.run_migration", mock_engine):
         result = runner.invoke(
@@ -35,10 +42,11 @@ def test_migrate_orchestrated_prompts_tos(runner: CliRunner) -> None:
                 "--stoat-url", "http://localhost",
                 "--token", "t",
             ],
-            input="n\n",  # decline ToS
+            input="n\n",
         )
     assert result.exit_code == 1
     assert "Terms of Service" in result.output
+    mock_engine.assert_not_called()
 
 
 def test_migrate_orchestrated_yes_flag_skips_tos(runner: CliRunner) -> None:
@@ -58,6 +66,7 @@ def test_migrate_orchestrated_yes_flag_skips_tos(runner: CliRunner) -> None:
             catch_exceptions=False,
         )
     assert result.exit_code == 0
+    mock_engine.assert_called_once()
 
 
 def test_migrate_offline_no_tos_prompt(runner: CliRunner) -> None:
@@ -81,35 +90,19 @@ def test_migrate_offline_no_tos_prompt(runner: CliRunner) -> None:
 **Step 2: Run tests to verify they fail**
 
 Run: `uv run pytest tests/test_cli.py::test_migrate_orchestrated_prompts_tos tests/test_cli.py::test_migrate_orchestrated_yes_flag_skips_tos tests/test_cli.py::test_migrate_offline_no_tos_prompt -v`
-Expected: FAIL — no ToS prompt exists, `--yes` is not a recognized option
+Expected: FAIL — `--yes` is not a recognized option
 
 **Step 3: Implement**
 
-In `src/discord_ferry/cli.py`, add `--yes` to `_common_options` (after `--max-emoji`):
+In `src/discord_ferry/cli.py`, add to the `_common_options` list, after the `--max-emoji` entry (around line 239):
 
 ```python
     click.option("--yes", "-y", is_flag=True, default=False, help="Skip ToS confirmation prompt"),
 ```
 
-In the `migrate` command function, after `config = _build_config(kwargs)` succeeds (around line 333), add:
+In the `migrate` command function (around line 333), after the `_build_config` try/except block and before `tracker = _ProgressTracker(...)`, add:
 
 ```python
-    if not config.skip_export and not kwargs.get("yes"):
-        click.confirm(
-            "Using a user token may violate Discord's Terms of Service. Continue?",
-            abort=True,
-        )
-```
-
-Wrap the entire `try: config = _build_config(...)` block to also catch `click.exceptions.Abort`:
-
-```python
-    try:
-        config = _build_config(kwargs)
-    except click.UsageError as exc:
-        console.print(f"[bold red]Error:[/] {exc}")
-        sys.exit(1)
-
     if not config.skip_export and not kwargs.get("yes"):
         try:
             click.confirm(
@@ -123,7 +116,7 @@ Wrap the entire `try: config = _build_config(...)` block to also catch `click.ex
 **Step 4: Run tests to verify they pass**
 
 Run: `uv run pytest tests/test_cli.py -v`
-Expected: All tests pass including the 3 new ones
+Expected: All CLI tests pass including the 3 new ones
 
 **Step 5: Run full verification**
 
@@ -135,7 +128,7 @@ Expected: All green
 ### Task 2: GUI Smart Resume Dialog (G2)
 
 **Files:**
-- Modify: `src/discord_ferry/gui.py:488-495` (top of `export_page()`)
+- Modify: `src/discord_ferry/gui.py` — add `_detect_cached_exports` helper, modify `export_page()`
 - Test: `tests/test_gui.py`
 
 **Step 1: Write the failing tests**
@@ -143,11 +136,10 @@ Expected: All green
 Add two tests to `tests/test_gui.py`:
 
 ```python
-def test_export_page_detects_cached_exports(tmp_path: Path) -> None:
+def test_detect_cached_exports_with_files(tmp_path: Path) -> None:
     """_detect_cached_exports returns summary when JSON files exist."""
     from discord_ferry.gui import _detect_cached_exports
 
-    # Create fake export files
     (tmp_path / "guild - general [123].json").write_text('{"messageCount": 50}')
     (tmp_path / "guild - memes [456].json").write_text('{"messageCount": 100}')
 
@@ -157,7 +149,7 @@ def test_export_page_detects_cached_exports(tmp_path: Path) -> None:
     assert result["total_size"] > 0
 
 
-def test_export_page_no_cached_exports(tmp_path: Path) -> None:
+def test_detect_cached_exports_empty_dir(tmp_path: Path) -> None:
     """_detect_cached_exports returns None when no JSON files exist."""
     from discord_ferry.gui import _detect_cached_exports
 
@@ -167,12 +159,12 @@ def test_export_page_no_cached_exports(tmp_path: Path) -> None:
 
 **Step 2: Run tests to verify they fail**
 
-Run: `uv run pytest tests/test_gui.py::test_export_page_detects_cached_exports tests/test_gui.py::test_export_page_no_cached_exports -v`
+Run: `uv run pytest tests/test_gui.py::test_detect_cached_exports_with_files tests/test_gui.py::test_detect_cached_exports_empty_dir -v`
 Expected: FAIL — `_detect_cached_exports` does not exist
 
 **Step 3: Implement the helper function**
 
-Add a helper function in `gui.py` (near the top, after the imports, around line 30):
+Add this function in `gui.py` after the existing `_format_size` or `_estimate_eta` helper functions (before the first `@ui.page` decorator):
 
 ```python
 def _detect_cached_exports(export_dir: Path) -> dict[str, int] | None:
@@ -190,89 +182,88 @@ def _detect_cached_exports(export_dir: Path) -> dict[str, int] | None:
 
 **Step 4: Run helper tests to verify they pass**
 
-Run: `uv run pytest tests/test_gui.py::test_export_page_detects_cached_exports tests/test_gui.py::test_export_page_no_cached_exports -v`
+Run: `uv run pytest tests/test_gui.py::test_detect_cached_exports_with_files tests/test_gui.py::test_detect_cached_exports_empty_dir -v`
 Expected: PASS
 
 **Step 5: Add the cached export card to export_page**
 
-In `export_page()` (around line 495), after the mode check and before the main card, add:
+In `export_page()`, the current structure is:
 
 ```python
+@ui.page("/export")
+def export_page() -> None:
+    ...
+    storage = app.storage.user
+    if storage.get("mode") != "orchestrated":
+        ui.navigate.to("/validate")
+        return
+
+    with ui.column().classes("w-full items-center min-h-screen bg-gray-50 py-10"):
+        # step indicator + export card + progress bar...
+```
+
+Modify it to check for cached exports BEFORE the main export UI. Use two sibling `ui.column` containers — one for the cached card, one for the export UI. Only one is visible at a time:
+
+```python
+@ui.page("/export")
+def export_page() -> None:
+    ...
+    storage = app.storage.user
+    if storage.get("mode") != "orchestrated":
+        ui.navigate.to("/validate")
+        return
+
     # Check for cached exports
-    discord_server = str(storage.get("discord_server_id", ""))
-    output_dir = Path(str(storage.get("output_dir", "./ferry-output")))
-    export_dir = output_dir / "dce_cache" / discord_server
+    export_dir = Path(str(storage.get("export_dir", "")))
     cached = _detect_cached_exports(export_dir) if export_dir.exists() else None
 
+    # --- Cached export card (shown only if cached exports found) ---
     if cached is not None:
         size_mb = cached["total_size"] / 1_000_000
-        with ui.card().classes("w-full max-w-2xl shadow-md fade-in bg-blue-50"):
-            ui.label("Found cached exports").classes("text-lg font-bold")
-            ui.label(
-                f"{cached['file_count']} files · {size_mb:.1f} MB"
-            ).classes("text-sm text-gray-600")
-            with ui.row().classes("w-full justify-end gap-2 mt-2"):
-                ui.button(
-                    "Use Cached", on_click=lambda: ui.navigate.to("/validate")
-                ).classes("bg-green-600 text-white")
-                ui.button(
-                    "Re-export", on_click=lambda: cached_card.set_visibility(False)
-                ).classes("bg-gray-500 text-white")
-        cached_card = ui.element("div")  # placeholder for visibility binding
-```
-
-**Important**: The cached card and the main export card must be siblings. When "Re-export" is clicked, hide the cached card and let the normal export flow proceed. The simplest approach: wrap the cached card in a container and toggle its visibility.
-
-Refined approach — wrap both in a container:
-
-```python
-    cached = _detect_cached_exports(export_dir) if export_dir.exists() else None
-    show_export = ui.state(cached is None)  # True = show export UI, False = show cached card
-```
-
-Actually, keep it simple. Use a `ref` pattern:
-
-At the top of `export_page()`, after the mode check:
-
-```python
-    discord_server = str(storage.get("discord_server_id", ""))
-    output_dir = Path(str(storage.get("output_dir", "./ferry-output")))
-    export_dir = output_dir / "dce_cache" / discord_server
-    cached = _detect_cached_exports(export_dir) if export_dir.exists() else None
-
-    if cached is not None:
-        size_mb = cached["total_size"] / 1_000_000
-        with ui.column().classes("w-full items-center min-h-screen bg-gray-50 py-10") as cached_view:
+        with ui.column().classes(
+            "w-full items-center min-h-screen bg-gray-50 py-10"
+        ) as cached_view:
             with ui.element("div").classes("w-full max-w-2xl fade-in"):
                 _render_step_indicator(active_step=2)
             with ui.card().classes("w-full max-w-2xl shadow-md fade-in"):
-                ui.label("Found cached exports").classes("text-xl font-bold text-center mt-2")
-                ui.label(
-                    f"{cached['file_count']} files · {size_mb:.1f} MB"
-                ).classes("text-sm text-gray-500 text-center mb-4")
+                ui.label("Found cached exports").classes(
+                    "text-xl font-bold text-center mt-2"
+                )
+                ui.label(f"{cached['file_count']} files · {size_mb:.1f} MB").classes(
+                    "text-sm text-gray-500 text-center mb-4"
+                )
                 with ui.row().classes("w-full justify-center gap-4 mt-2"):
                     ui.button(
-                        "Use Cached", on_click=lambda: ui.navigate.to("/validate")
+                        "Use Cached",
+                        on_click=lambda: ui.navigate.to("/validate"),
                     ).props("color=green")
-                    def _re_export():
-                        cached_view.set_visibility(False)
-                        export_view.set_visibility(True)
-                    ui.button("Re-export", on_click=_re_export).props("color=grey")
-        # The normal export UI follows, initially hidden
-        export_view_visible = False
-    else:
-        export_view_visible = True
+                    ui.button(
+                        "Re-export",
+                        on_click=lambda: (
+                            cached_view.set_visibility(False),
+                            export_view.set_visibility(True),
+                        ),
+                    ).props("color=grey")
+
+    # --- Normal export UI ---
+    with ui.column().classes(
+        "w-full items-center min-h-screen bg-gray-50 py-10"
+    ) as export_view:
+        if cached is not None:
+            export_view.set_visibility(False)
+
+        # ... rest of existing export page content unchanged ...
+        with ui.element("div").classes("w-full max-w-2xl fade-in"):
+            _render_step_indicator(active_step=2)
+        # ... etc
 ```
 
-Then wrap the existing export UI column in:
-
-```python
-    with ui.column().classes("w-full items-center min-h-screen bg-gray-50 py-10") as export_view:
-        export_view.set_visibility(export_view_visible)
-        # ... existing export page content ...
-```
-
-This is the cleanest approach — two sibling views, one visible at a time.
+**Key points:**
+- `export_dir` is always set in storage before this page loads (the setup page stores it at line 453)
+- When cached: `cached_view` is visible, `export_view` is hidden
+- "Re-export" button hides cached_view and shows export_view
+- "Use Cached" navigates directly to `/validate`
+- The existing export UI column (`with ui.column()...`) just gets renamed to `export_view` and gains the initial visibility toggle — no other changes to its content
 
 **Step 6: Run full verification**
 
@@ -289,20 +280,22 @@ Expected: All green
 
 **Step 1: Write the failing tests**
 
-Add to `tests/test_exporter_manager.py`:
+Add these imports to the top of `tests/test_exporter_manager.py` (merge with existing imports):
 
 ```python
-import asyncio
 import io
 import zipfile
 from unittest.mock import AsyncMock
 
-import pytest
+import aiohttp
 from aioresponses import aioresponses
 
 from discord_ferry.exporter.manager import DCE_VERSION, download_dce
+```
 
+Add test helper and class at the end of the file:
 
+```python
 def _make_dce_zip() -> bytes:
     """Create a minimal valid DCE zip in memory."""
     buf = io.BytesIO()
@@ -317,26 +310,42 @@ class TestDownloadDceRetry:
         """download_dce retries once on network error then succeeds."""
         events = []
         dce_zip = _make_dce_zip()
-        release_url = f"https://api.github.com/repos/Tyrrrz/DiscordChatExporter/releases/tags/v{DCE_VERSION}"
+        release_url = (
+            "https://api.github.com/repos/Tyrrrz/"
+            f"DiscordChatExporter/releases/tags/v{DCE_VERSION}"
+        )
 
         with (
             aioresponses() as m,
             patch("discord_ferry.exporter.manager._get_dce_dir", return_value=tmp_path),
             patch("discord_ferry.exporter.manager._get_asset_name", return_value="test.zip"),
-            patch("discord_ferry.exporter.manager.get_dce_path", return_value=tmp_path / "DiscordChatExporter.Cli"),
-            patch("discord_ferry.exporter.manager.asyncio.sleep", new_callable=AsyncMock),
+            patch(
+                "discord_ferry.exporter.manager.get_dce_path",
+                return_value=tmp_path / "DiscordChatExporter.Cli",
+            ),
+            patch("asyncio.sleep", new_callable=AsyncMock),
         ):
-            # First call fails, second succeeds
-            m.get(release_url, exception=Exception("network error"))
-            m.get(release_url, status=200, payload={
-                "assets": [{"name": "test.zip", "browser_download_url": "https://example.com/test.zip"}]
-            })
+            # First attempt: network error
+            m.get(release_url, exception=aiohttp.ClientError("network error"))
+            # Second attempt: success
+            m.get(
+                release_url,
+                status=200,
+                payload={
+                    "assets": [
+                        {
+                            "name": "test.zip",
+                            "browser_download_url": "https://example.com/test.zip",
+                        }
+                    ]
+                },
+            )
             m.get("https://example.com/test.zip", status=200, body=dce_zip)
             (tmp_path / "DiscordChatExporter.Cli").touch()
 
             result = await download_dce(events.append)
             assert result is not None
-            retry_msgs = [e.message for e in events if "retry" in e.message.lower() or "Retrying" in e.message]
+            retry_msgs = [e for e in events if "retrying" in e.message.lower()]
             assert len(retry_msgs) >= 1
 
     @pytest.mark.asyncio
@@ -345,47 +354,51 @@ class TestDownloadDceRetry:
         from discord_ferry.errors import DCENotFoundError
 
         events = []
-        release_url = f"https://api.github.com/repos/Tyrrrz/DiscordChatExporter/releases/tags/v{DCE_VERSION}"
+        release_url = (
+            "https://api.github.com/repos/Tyrrrz/"
+            f"DiscordChatExporter/releases/tags/v{DCE_VERSION}"
+        )
 
         with (
             aioresponses() as m,
             patch("discord_ferry.exporter.manager._get_dce_dir", return_value=tmp_path),
             patch("discord_ferry.exporter.manager._get_asset_name", return_value="test.zip"),
-            patch("discord_ferry.exporter.manager.asyncio.sleep", new_callable=AsyncMock),
+            patch("asyncio.sleep", new_callable=AsyncMock),
         ):
-            m.get(release_url, exception=Exception("network error"))
-            m.get(release_url, exception=Exception("network error again"))
+            m.get(release_url, exception=aiohttp.ClientError("fail 1"))
+            m.get(release_url, exception=aiohttp.ClientError("fail 2"))
 
-            with pytest.raises(DCENotFoundError, match="Network error"):
+            with pytest.raises(DCENotFoundError):
                 await download_dce(events.append)
 ```
 
 **Step 2: Run tests to verify they fail**
 
 Run: `uv run pytest tests/test_exporter_manager.py::TestDownloadDceRetry -v`
-Expected: FAIL — no retry logic exists
+Expected: FAIL — no retry logic exists, download fails on first error
 
 **Step 3: Implement retry in download_dce**
 
-In `src/discord_ferry/exporter/manager.py`, modify `download_dce()`. Add `import asyncio` at the top if not already present. Wrap the `try/except aiohttp.ClientError` block in a retry loop:
+In `src/discord_ferry/exporter/manager.py`:
+
+1. Add `import asyncio` to the imports at the top of the file.
+
+2. Replace the body of `download_dce()` with a retry loop. The current structure is:
 
 ```python
-async def download_dce(on_event: EventCallback) -> Path:
-    from discord_ferry.core.events import MigrationEvent
+    try:
+        async with aiohttp.ClientSession() as session:
+            # ... fetch release, find asset, download zip ...
+    except aiohttp.ClientError as e:
+        raise DCENotFoundError(...) from e
 
-    asset_name = _get_asset_name()
-    release_url = _GITHUB_RELEASE_URL.format(version=DCE_VERSION)
-    dce_dir = _get_dce_dir()
+    # extract zip ...
+```
 
-    on_event(
-        MigrationEvent(
-            phase="export",
-            status="progress",
-            message=f"Downloading DiscordChatExporter v{DCE_VERSION}...",
-        )
-    )
+Change it to:
 
-    last_error: Exception | None = None
+```python
+    data: bytes | None = None
     for attempt in range(2):
         try:
             async with aiohttp.ClientSession() as session:
@@ -423,7 +436,6 @@ async def download_dce(on_event: EventCallback) -> Path:
             break  # success — exit retry loop
 
         except (aiohttp.ClientError, DCENotFoundError) as e:
-            last_error = e
             if attempt == 0:
                 on_event(
                     MigrationEvent(
@@ -436,41 +448,16 @@ async def download_dce(on_event: EventCallback) -> Path:
             else:
                 raise DCENotFoundError(f"Network error downloading DCE: {e}") from e
 
-    # Extract zip (unchanged from current code)
+    assert data is not None  # unreachable if both attempts fail (raises above)
+
+    # Extract zip — unchanged from here down
     dce_dir.mkdir(parents=True, exist_ok=True)
-    try:
-        with zipfile.ZipFile(io.BytesIO(data)) as zf:
-            for member in zf.infolist():
-                member_path = (dce_dir / member.filename).resolve()
-                if not str(member_path).startswith(str(dce_dir.resolve())):
-                    raise DCENotFoundError(
-                        f"Zip entry {member.filename!r} would extract outside target directory"
-                    )
-            zf.extractall(dce_dir)
-    except zipfile.BadZipFile as e:
-        raise DCENotFoundError(f"Downloaded file is not a valid zip: {e}") from e
-
-    exe_path = get_dce_path()
-    if exe_path is None:
-        raise DCENotFoundError(f"Extraction succeeded but executable not found in {dce_dir}")
-
-    if platform.system() != "Windows":
-        exe_path.chmod(0o755)
-
-    on_event(
-        MigrationEvent(
-            phase="export",
-            status="progress",
-            message=f"DiscordChatExporter v{DCE_VERSION} ready.",
-        )
-    )
-
-    return exe_path
+    # ... rest of extraction code unchanged ...
 ```
 
-**Key change**: The `try/except` now wraps the entire HTTP section. On first failure (`attempt == 0`), emit a "retrying" event, sleep 3s, and loop. On second failure (`attempt == 1`), raise.
+**Important**: Move `from discord_ferry.core.events import MigrationEvent` to the top of the function body (it's already there in the current code). The `MigrationEvent` reference inside the retry except block needs it in scope.
 
-**Do NOT retry** `zipfile.BadZipFile` — that happens after download succeeds and won't fix itself.
+**Do NOT retry** `zipfile.BadZipFile` — that happens after a successful download and retrying won't help.
 
 **Step 4: Run tests to verify they pass**
 
@@ -487,11 +474,11 @@ Expected: All green
 ### Task 4: Built-in Token Help Dialog (G4)
 
 **Files:**
-- Modify: `src/discord_ferry/gui.py:293-299` (replace external link with dialog trigger)
+- Modify: `src/discord_ferry/gui.py:293-299` (replace external link with dialog)
 
-**No tests needed** — this is purely UI content with no logic.
+**No tests needed** — purely UI content, no logic.
 
-**Step 1: Replace external link with dialog**
+**Step 1: Replace external link with inline help dialog**
 
 In `src/discord_ferry/gui.py`, find the block at lines 293-299:
 
@@ -522,40 +509,38 @@ Replace with:
                                 'Go to the Network tab and type "/api" in the filter'
                             )
                             ui.element("li").text(
-                                "Click any channel in Discord, then find a request"
+                                "Click any channel, then click a request in the list"
                             )
                             ui.element("li").text(
-                                'Click the request → Headers → copy the "Authorization" value'
+                                'Click Headers tab → copy the "Authorization" value'
                             )
                         ui.label("Server ID").classes("text-sm font-bold mt-3")
                         with ui.element("ol").classes("text-sm text-gray-700 pl-4"):
                             ui.element("li").text(
-                                "In Discord, go to Settings → App Settings → Advanced"
+                                "Discord Settings → App Settings → Advanced → enable Developer Mode"
                             )
-                            ui.element("li").text("Enable Developer Mode")
                             ui.element("li").text(
                                 "Right-click your server name → Copy Server ID"
                             )
                         with ui.row().classes("w-full justify-end mt-4"):
-                            ui.button("Got it", on_click=help_dialog.close).props("flat")
+                            ui.button("Got it", on_click=help_dialog.close).props(
+                                "flat"
+                            )
 
                     with ui.row().classes("items-center gap-1 -mt-2"):
                         ui.icon("help_outline", size="16px").classes("text-gray-400")
-                        ui.link(
-                            "How to find your Discord token and server ID",
-                            target=help_dialog,
-                        ).classes("text-xs text-blue-600 cursor-pointer")
-```
-
-**NiceGUI note**: `ui.link` with `target=` pointing to a dialog will open it on click. If that doesn't work in the current NiceGUI version, fall back to:
-
-```python
                         ui.label(
                             "How to find your Discord token and server ID"
                         ).classes("text-xs text-blue-600 cursor-pointer").on(
                             "click", lambda: help_dialog.open()
                         )
 ```
+
+**NiceGUI notes:**
+- `ui.dialog()` + `ui.card()` as context managers create the dialog content
+- The dialog is hidden by default and opened via `.open()`
+- Use `ui.label().on("click", ...)` instead of `ui.link(target=dialog)` — the link-to-dialog pattern is not reliably supported in NiceGUI
+- `ui.element("ol")` and `ui.element("li")` render native HTML ordered list elements
 
 **Step 2: Run full verification**
 
@@ -582,6 +567,8 @@ __version__ = "1.2.1"
 ```toml
 version = "1.2.1"
 ```
+
+**Remember**: `ferry.spec` reads version from `__init__.py` — both files must match.
 
 **Step 2: Add CHANGELOG entry**
 
