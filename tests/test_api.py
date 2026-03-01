@@ -20,6 +20,10 @@ from discord_ferry.migrator.api import (
     api_fetch_server,
     api_pin_message,
     api_send_message,
+    api_set_channel_default_permissions,
+    api_set_channel_role_permissions,
+    api_set_role_permissions,
+    api_set_server_default_permissions,
 )
 
 BASE_URL = "https://api.test"
@@ -413,3 +417,59 @@ async def test_api_503_retry_success(mock_aiohttp: aioresponses) -> None:
     async with aiohttp.ClientSession() as session:
         result = await api_fetch_server(session, BASE_URL, TOKEN, "srv1")
     assert result["_id"] == "srv1"
+
+
+# ---------------------------------------------------------------------------
+# api_set_role_permissions
+# ---------------------------------------------------------------------------
+
+
+async def test_api_set_role_permissions(mock_aiohttp: aioresponses) -> None:
+    """PUT /servers/srv1/permissions/role1 sends allow/deny permission pair."""
+    mock_aiohttp.put(f"{BASE_URL}/servers/srv1/permissions/role1", payload={})
+    async with aiohttp.ClientSession() as session:
+        await api_set_role_permissions(
+            session, BASE_URL, TOKEN, "srv1", "role1", allow=4194304, deny=0
+        )
+
+
+# ---------------------------------------------------------------------------
+# api_set_server_default_permissions
+# ---------------------------------------------------------------------------
+
+
+async def test_api_set_server_default_permissions(mock_aiohttp: aioresponses) -> None:
+    """PUT /servers/srv1/permissions/default sends a single permissions integer."""
+    mock_aiohttp.put(f"{BASE_URL}/servers/srv1/permissions/default", payload={})
+    async with aiohttp.ClientSession() as session:
+        await api_set_server_default_permissions(
+            session, BASE_URL, TOKEN, "srv1", permissions=1048576
+        )
+
+
+# ---------------------------------------------------------------------------
+# api_set_channel_role_permissions
+# ---------------------------------------------------------------------------
+
+
+async def test_api_set_channel_role_permissions(mock_aiohttp: aioresponses) -> None:
+    """PUT /channels/ch1/permissions/role1 sends allow/deny permission pair."""
+    mock_aiohttp.put(f"{BASE_URL}/channels/ch1/permissions/role1", payload={})
+    async with aiohttp.ClientSession() as session:
+        await api_set_channel_role_permissions(
+            session, BASE_URL, TOKEN, "ch1", "role1", allow=4194304, deny=8388608
+        )
+
+
+# ---------------------------------------------------------------------------
+# api_set_channel_default_permissions
+# ---------------------------------------------------------------------------
+
+
+async def test_api_set_channel_default_permissions(mock_aiohttp: aioresponses) -> None:
+    """PUT /channels/ch1/permissions/default sends allow/deny permission pair."""
+    mock_aiohttp.put(f"{BASE_URL}/channels/ch1/permissions/default", payload={})
+    async with aiohttp.ClientSession() as session:
+        await api_set_channel_default_permissions(
+            session, BASE_URL, TOKEN, "ch1", allow=4194304, deny=0
+        )

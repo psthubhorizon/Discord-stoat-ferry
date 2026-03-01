@@ -419,3 +419,78 @@ async def api_pin_message(
     """
     url = f"{stoat_url.rstrip('/')}/channels/{channel_id}/messages/{message_id}/pin"
     return await _api_request(session, "PUT", url, token, None)
+
+
+async def api_set_role_permissions(
+    session: aiohttp.ClientSession,
+    stoat_url: str,
+    token: str,
+    server_id: str,
+    role_id: str,
+    *,
+    allow: int,
+    deny: int,
+) -> dict[str, Any]:
+    """Set permissions for a role on a server.
+
+    Uses PUT /servers/{server}/permissions/{role_id}.
+    """
+    url = f"{stoat_url.rstrip('/')}/servers/{server_id}/permissions/{role_id}"
+    return await _api_request(
+        session, "PUT", url, token, {"permissions": {"allow": allow, "deny": deny}}
+    )
+
+
+async def api_set_server_default_permissions(
+    session: aiohttp.ClientSession,
+    stoat_url: str,
+    token: str,
+    server_id: str,
+    *,
+    permissions: int,
+) -> dict[str, Any]:
+    """Set server default (@everyone) permissions.
+
+    Uses PUT /servers/{server}/permissions/default.
+    """
+    url = f"{stoat_url.rstrip('/')}/servers/{server_id}/permissions/default"
+    return await _api_request(session, "PUT", url, token, {"permissions": permissions})
+
+
+async def api_set_channel_role_permissions(
+    session: aiohttp.ClientSession,
+    stoat_url: str,
+    token: str,
+    channel_id: str,
+    role_id: str,
+    *,
+    allow: int,
+    deny: int,
+) -> dict[str, Any]:
+    """Set per-role permission override on a channel.
+
+    Uses PUT /channels/{channel}/permissions/{role_id}.
+    """
+    url = f"{stoat_url.rstrip('/')}/channels/{channel_id}/permissions/{role_id}"
+    return await _api_request(
+        session, "PUT", url, token, {"permissions": {"allow": allow, "deny": deny}}
+    )
+
+
+async def api_set_channel_default_permissions(
+    session: aiohttp.ClientSession,
+    stoat_url: str,
+    token: str,
+    channel_id: str,
+    *,
+    allow: int,
+    deny: int,
+) -> dict[str, Any]:
+    """Set default (everyone) permission override on a channel.
+
+    Uses PUT /channels/{channel}/permissions/default.
+    """
+    url = f"{stoat_url.rstrip('/')}/channels/{channel_id}/permissions/default"
+    return await _api_request(
+        session, "PUT", url, token, {"permissions": {"allow": allow, "deny": deny}}
+    )
