@@ -21,7 +21,7 @@ from discord_ferry.state import load_state
 
 _HAS_WEBVIEW = False
 try:
-    import webview  # type: ignore[import-not-found]
+    import webview  # type: ignore[import-not-found,unused-ignore]
 
     _HAS_WEBVIEW = True
 except ImportError:
