@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import io
 import logging
 import platform
@@ -112,39 +113,57 @@ async def download_dce(on_event: EventCallback) -> Path:
         )
     )
 
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(
-                release_url, headers={"Accept": "application/vnd.github.v3+json"}
-            ) as resp:
-                if resp.status != 200:
+    data: bytes | None = None
+    for attempt in range(2):
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    release_url, headers={"Accept": "application/vnd.github.v3+json"}
+                ) as resp:
+                    if resp.status != 200:
+                        raise DCENotFoundError(
+                            f"GitHub API returned {resp.status} for DCE v{DCE_VERSION}"
+                        )
+                    release_data = await resp.json()
+
+                download_url: str | None = None
+                for asset in release_data.get("assets", []):
+                    if asset["name"] == asset_name:
+                        download_url = asset["browser_download_url"]
+                        break
+
+                if download_url is None:
                     raise DCENotFoundError(
-                        f"GitHub API returned {resp.status} for DCE v{DCE_VERSION}"
+                        f"Asset {asset_name} not found in DCE v{DCE_VERSION} release"
                     )
-                release_data = await resp.json()
 
-            download_url: str | None = None
-            for asset in release_data.get("assets", []):
-                if asset["name"] == asset_name:
-                    download_url = asset["browser_download_url"]
-                    break
+                async with session.get(download_url) as resp:
+                    if resp.status != 200:
+                        raise DCENotFoundError(
+                            f"Failed to download {asset_name}: HTTP {resp.status}"
+                        )
+                    data = await resp.read()
+                    if len(data) > _MAX_DCE_BYTES:
+                        raise DCENotFoundError(
+                            f"DCE download unexpectedly large ({len(data)} bytes); aborting"
+                        )
 
-            if download_url is None:
-                raise DCENotFoundError(
-                    f"Asset {asset_name} not found in DCE v{DCE_VERSION} release"
+            break  # success — exit retry loop
+
+        except (aiohttp.ClientError, DCENotFoundError) as e:
+            if attempt == 0:
+                on_event(
+                    MigrationEvent(
+                        phase="export",
+                        status="progress",
+                        message="Download failed, retrying in 3s...",
+                    )
                 )
+                await asyncio.sleep(3)
+            else:
+                raise DCENotFoundError(f"Network error downloading DCE: {e}") from e
 
-            async with session.get(download_url) as resp:
-                if resp.status != 200:
-                    raise DCENotFoundError(f"Failed to download {asset_name}: HTTP {resp.status}")
-                data = await resp.read()
-                if len(data) > _MAX_DCE_BYTES:
-                    raise DCENotFoundError(
-                        f"DCE download unexpectedly large ({len(data)} bytes); aborting"
-                    )
-
-    except aiohttp.ClientError as e:
-        raise DCENotFoundError(f"Network error downloading DCE: {e}") from e
+    assert data is not None  # unreachable — both-fail case raises above
 
     dce_dir.mkdir(parents=True, exist_ok=True)
     try:

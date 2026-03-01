@@ -237,6 +237,7 @@ _common_options = [
     ),
     click.option("--max-channels", default=200, type=int, help="Channel limit (self-hosted)"),
     click.option("--max-emoji", default=100, type=int, help="Emoji limit (self-hosted)"),
+    click.option("--yes", "-y", is_flag=True, default=False, help="Skip ToS confirmation prompt"),
 ]
 
 
@@ -330,6 +331,16 @@ def migrate(**kwargs: Any) -> None:
     except click.UsageError as exc:
         console.print(f"[bold red]Error:[/] {exc}")
         sys.exit(1)
+
+    if not config.skip_export and not kwargs.get("yes"):
+        try:
+            click.confirm(
+                "Using a user token may violate Discord's Terms of Service. Continue?",
+                abort=True,
+            )
+        except click.exceptions.Abort:
+            sys.exit(1)
+
     tracker = _ProgressTracker(verbose=config.verbose)
 
     console.print("[bold]Discord Ferry[/] — starting migration\n")

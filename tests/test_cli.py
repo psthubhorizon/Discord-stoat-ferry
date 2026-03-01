@@ -280,6 +280,7 @@ def test_migrate_orchestrated_mode(runner: CliRunner) -> None:
                 "http://localhost",
                 "--token",
                 "t",
+                "--yes",
             ],
             catch_exceptions=False,
         )
@@ -326,3 +327,77 @@ def test_migrate_neither_mode(runner: CliRunner) -> None:
     )
     assert result.exit_code == 1
     assert "Provide either" in result.output
+
+
+# ---------------------------------------------------------------------------
+# Migrate — ToS confirmation
+# ---------------------------------------------------------------------------
+
+
+def test_migrate_orchestrated_prompts_tos(runner: CliRunner) -> None:
+    """Orchestrated mode prompts for ToS confirmation; declining exits 1."""
+    mock_engine = _make_mock_engine()
+    with patch("discord_ferry.cli.run_migration", mock_engine):
+        result = runner.invoke(
+            main,
+            [
+                "migrate",
+                "--discord-token",
+                "dt",
+                "--discord-server",
+                "12345",
+                "--stoat-url",
+                "http://localhost",
+                "--token",
+                "t",
+            ],
+            input="n\n",
+        )
+    assert result.exit_code == 1
+    assert "Terms of Service" in result.output
+    mock_engine.assert_not_called()
+
+
+def test_migrate_orchestrated_yes_flag_skips_tos(runner: CliRunner) -> None:
+    """--yes flag bypasses ToS prompt in orchestrated mode."""
+    mock_engine = _make_mock_engine()
+    with patch("discord_ferry.cli.run_migration", mock_engine):
+        result = runner.invoke(
+            main,
+            [
+                "migrate",
+                "--discord-token",
+                "dt",
+                "--discord-server",
+                "12345",
+                "--stoat-url",
+                "http://localhost",
+                "--token",
+                "t",
+                "--yes",
+            ],
+            catch_exceptions=False,
+        )
+    assert result.exit_code == 0
+    mock_engine.assert_called_once()
+
+
+def test_migrate_offline_no_tos_prompt(runner: CliRunner) -> None:
+    """Offline mode (--export-dir) does not prompt for ToS."""
+    mock_engine = _make_mock_engine()
+    with patch("discord_ferry.cli.run_migration", mock_engine):
+        result = runner.invoke(
+            main,
+            [
+                "migrate",
+                "--export-dir",
+                FIXTURES_DIR,
+                "--stoat-url",
+                "http://localhost",
+                "--token",
+                "t",
+            ],
+            catch_exceptions=False,
+        )
+    assert result.exit_code == 0
+    assert "Terms of Service" not in result.output

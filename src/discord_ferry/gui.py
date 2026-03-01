@@ -156,6 +156,19 @@ def _resolve_stoat_url(toggle_value: str, custom_url_value: str) -> str:
     return custom_url_value.strip()
 
 
+def _detect_cached_exports(export_dir: Path) -> dict[str, int] | None:
+    """Check for existing DCE JSON exports in a directory.
+
+    Returns:
+        Dict with 'file_count' and 'total_size' (bytes), or None if no exports found.
+    """
+    json_files = list(export_dir.glob("*.json"))
+    if not json_files:
+        return None
+    total_size = sum(f.stat().st_size for f in json_files)
+    return {"file_count": len(json_files), "total_size": total_size}
+
+
 def _render_step_indicator(active_step: int) -> None:
     """Render a 4-step visual indicator (1-indexed). Call inside a ui.column."""
     with ui.row().classes("w-full justify-center items-center gap-0 mb-6"):
@@ -290,13 +303,35 @@ def setup_page() -> None:
                         value=str(storage.get("discord_server_id", "")),
                     ).classes("w-full")
 
+                    with ui.dialog() as help_dialog, ui.card().classes("max-w-lg"):
+                        ui.label("How to find your Discord credentials").classes(
+                            "text-lg font-bold mb-2"
+                        )
+                        ui.label("Discord Token").classes("text-sm font-bold mt-2")
+                        ui.html(
+                            "<ol class='text-sm text-gray-700 pl-4 list-decimal'>"
+                            "<li>Open Discord in your browser (not the desktop app)</li>"
+                            "<li>Press F12 to open Developer Tools</li>"
+                            "<li>Go to Network tab, type /api in the filter</li>"
+                            "<li>Click any channel, then click a request in the list</li>"
+                            "<li>Headers tab \u2192 copy the Authorization value</li>"
+                            "</ol>"
+                        )
+                        ui.label("Server ID").classes("text-sm font-bold mt-3")
+                        ui.html(
+                            "<ol class='text-sm text-gray-700 pl-4 list-decimal'>"
+                            "<li>Discord Settings \u2192 Advanced \u2192 enable Developer Mode</li>"
+                            "<li>Right-click your server name \u2192 Copy Server ID</li>"
+                            "</ol>"
+                        )
+                        with ui.row().classes("w-full justify-end mt-4"):
+                            ui.button("Got it", on_click=help_dialog.close).props("flat")
+
                     with ui.row().classes("items-center gap-1 -mt-2"):
                         ui.icon("help_outline", size="16px").classes("text-gray-400")
-                        ui.link(
-                            "How to find your Discord token and server ID",
-                            "https://github.com/Tyrrrz/DiscordChatExporter/wiki",
-                            new_tab=True,
-                        ).classes("text-xs text-blue-600")
+                        ui.label("How to find your Discord token and server ID").classes(
+                            "text-xs text-blue-600 cursor-pointer"
+                        ).on("click", lambda: help_dialog.open())
 
                     tos_checkbox = ui.checkbox(
                         "I acknowledge that using a user token may violate Discord's ToS"
@@ -492,7 +527,41 @@ def export_page() -> None:
         ui.navigate.to("/validate")
         return
 
-    with ui.column().classes("w-full items-center min-h-screen bg-gray-50 py-10"):
+    # Check for cached exports
+    export_dir = Path(str(storage.get("export_dir", "")))
+    cached = _detect_cached_exports(export_dir) if export_dir.exists() else None
+
+    # --- Cached export card (shown only when cached exports found) ---
+    if cached is not None:
+        size_mb = cached["total_size"] / 1_000_000
+        with ui.column().classes(
+            "w-full items-center min-h-screen bg-gray-50 py-10"
+        ) as cached_view:
+            with ui.element("div").classes("w-full max-w-2xl fade-in"):
+                _render_step_indicator(active_step=2)
+            with ui.card().classes("w-full max-w-2xl shadow-md fade-in"):
+                ui.label("Found cached exports").classes("text-xl font-bold text-center mt-2")
+                ui.label(f"{cached['file_count']} files \u00b7 {size_mb:.1f} MB").classes(
+                    "text-sm text-gray-500 text-center mb-4"
+                )
+                with ui.row().classes("w-full justify-center gap-4 mt-2"):
+                    ui.button(
+                        "Use Cached",
+                        on_click=lambda: ui.navigate.to("/validate"),
+                    ).props("color=green")
+
+                    # export_view is defined below; closure is only invoked on click.
+                    def _re_export() -> None:
+                        cached_view.set_visibility(False)
+                        export_view.set_visibility(True)
+
+                    ui.button("Re-export", on_click=_re_export).props("color=grey")
+
+    # --- Normal export UI ---
+    with ui.column().classes("w-full items-center min-h-screen bg-gray-50 py-10") as export_view:
+        if cached is not None:
+            export_view.set_visibility(False)
+
         with ui.element("div").classes("w-full max-w-2xl fade-in"):
             _render_step_indicator(active_step=2)
 

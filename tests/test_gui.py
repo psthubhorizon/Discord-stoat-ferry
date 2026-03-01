@@ -104,6 +104,27 @@ async def _slow_phase(
     await asyncio.sleep(0.05)
 
 
+def test_detect_cached_exports_with_files(tmp_path: Path) -> None:
+    """_detect_cached_exports returns summary when JSON files exist."""
+    from discord_ferry.gui import _detect_cached_exports
+
+    (tmp_path / "guild - general [123].json").write_text('{"messageCount": 50}')
+    (tmp_path / "guild - memes [456].json").write_text('{"messageCount": 100}')
+
+    result = _detect_cached_exports(tmp_path)
+    assert result is not None
+    assert result["file_count"] == 2
+    assert result["total_size"] > 0
+
+
+def test_detect_cached_exports_empty_dir(tmp_path: Path) -> None:
+    """_detect_cached_exports returns None when no JSON files exist."""
+    from discord_ferry.gui import _detect_cached_exports
+
+    result = _detect_cached_exports(tmp_path)
+    assert result is None
+
+
 @pytest.mark.asyncio
 async def test_cancel_event_stops_migration() -> None:
     """When cancel_event is set, the engine should return early (not raise)."""

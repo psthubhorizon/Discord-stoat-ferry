@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.2.1] — 2026-03-01
+
+### Added
+
+- **CLI ToS disclaimer**: Orchestrated mode now prompts for Discord ToS acknowledgment. Use `--yes` / `-y` to skip in scripts.
+- **GUI smart resume**: Export page detects cached exports and offers [Use Cached] or [Re-export] choice.
+- **DCE download retry**: `download_dce()` retries once on network error before failing.
+- **Built-in token help**: "How to find these?" opens an inline dialog with step-by-step instructions instead of linking to external wiki.
+
 ## [1.2.0] — 2026-02-28
 
 ### Added
