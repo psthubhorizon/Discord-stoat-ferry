@@ -5,6 +5,7 @@ from datetime import datetime
 from pathlib import Path
 
 from discord_ferry.config import FerryConfig
+from discord_ferry.discord.metadata import load_discord_metadata
 from discord_ferry.parser.models import DCEExport
 from discord_ferry.state import MigrationState
 
@@ -69,9 +70,103 @@ def generate_report(
         },
     }
 
+    # Build post-migration checklist
+    discord_meta = load_discord_metadata(config.output_dir)
+    checklist = _build_checklist(state, has_permissions=discord_meta is not None)
+    report["checklist"] = checklist
+
     _write_report(config.output_dir, report)
 
     return report
+
+
+def _build_checklist(
+    state: MigrationState,
+    has_permissions: bool,
+) -> list[dict[str, str]]:
+    """Build a dynamic post-migration checklist of manual steps.
+
+    Args:
+        state: Migration state with maps and counters.
+        has_permissions: Whether Discord permissions were migrated.
+
+    Returns:
+        List of checklist items with 'task' and 'status' keys.
+    """
+    items: list[dict[str, str]] = []
+
+    # Always present items
+    items.append(
+        {
+            "task": "Verify channel order and category assignments in Stoat",
+            "status": "todo",
+        }
+    )
+    items.append(
+        {
+            "task": "Check message formatting in a few channels",
+            "status": "todo",
+        }
+    )
+
+    # Permission-dependent items
+    if has_permissions:
+        items.append(
+            {
+                "task": "Review migrated role permissions in Stoat server settings",
+                "status": "todo",
+            }
+        )
+        items.append(
+            {
+                "task": "Verify channel permission overrides are correct",
+                "status": "todo",
+            }
+        )
+    else:
+        items.append(
+            {
+                "task": "Set up role permissions manually (not migrated — no Discord token)",
+                "status": "todo",
+            }
+        )
+
+    # Conditional items based on state
+    if state.emoji_map:
+        items.append(
+            {
+                "task": "Verify custom emoji are rendering correctly",
+                "status": "todo",
+            }
+        )
+
+    if state.warnings:
+        items.append(
+            {
+                "task": f"Review {len(state.warnings)} warning(s) in the report",
+                "status": "todo",
+            }
+        )
+
+    if state.errors:
+        items.append(
+            {
+                "task": (
+                    f"Investigate {len(state.errors)} error(s) — some content may not have migrated"
+                ),
+                "status": "todo",
+            }
+        )
+
+    # Final items
+    items.append(
+        {
+            "task": "Invite members to the new Stoat server",
+            "status": "todo",
+        }
+    )
+
+    return items
 
 
 def _calculate_duration(started_at: str, completed_at: str) -> float:

@@ -4,6 +4,11 @@ import json
 from pathlib import Path
 
 from discord_ferry.config import FerryConfig
+from discord_ferry.discord.metadata import (
+    DiscordMetadata,
+    PermissionPair,
+    save_discord_metadata,
+)
 from discord_ferry.parser.models import DCEChannel, DCEExport, DCEGuild
 from discord_ferry.reporter import generate_report
 from discord_ferry.state import MigrationState
@@ -315,3 +320,76 @@ def test_generate_report_has_nonzero_duration(tmp_path: Path) -> None:
 
     assert report["completed_at"] != ""
     assert report["duration_seconds"] == 300
+
+
+def test_checklist_with_permissions(tmp_path: Path) -> None:
+    """Checklist includes permission review items when discord_metadata.json is present."""
+    config = _make_config(tmp_path)
+    state = MigrationState()
+    exports = [_make_export()]
+
+    meta = DiscordMetadata(
+        guild_id="111",
+        fetched_at="2024-01-01T00:00:00",
+        server_default_permissions=0,
+        role_permissions={"r1": PermissionPair(allow=0, deny=0)},
+        channel_metadata={},
+    )
+    save_discord_metadata(meta, tmp_path)
+
+    report = generate_report(config, state, exports)
+
+    checklist = report["checklist"]
+    assert isinstance(checklist, list)
+    tasks = [item["task"] for item in checklist]  # type: ignore[index]
+    assert any("Review migrated role permissions" in t for t in tasks)
+    assert any("Verify channel permission overrides" in t for t in tasks)
+    assert not any("Set up role permissions manually" in t for t in tasks)
+
+
+def test_checklist_without_permissions(tmp_path: Path) -> None:
+    """Checklist includes manual permission setup item when discord_metadata.json is absent."""
+    config = _make_config(tmp_path)
+    state = MigrationState()
+    exports = [_make_export()]
+
+    report = generate_report(config, state, exports)
+
+    checklist = report["checklist"]
+    assert isinstance(checklist, list)
+    tasks = [item["task"] for item in checklist]  # type: ignore[index]
+    assert any("Set up role permissions manually" in t for t in tasks)
+    assert not any("Review migrated role permissions" in t for t in tasks)
+
+
+def test_checklist_with_warnings(tmp_path: Path) -> None:
+    """Checklist includes a warnings review item when state.warnings is non-empty."""
+    config = _make_config(tmp_path)
+    state = MigrationState(
+        warnings=[
+            {"phase": "messages", "context": "ch1", "message": "warn1"},
+            {"phase": "messages", "context": "ch2", "message": "warn2"},
+        ]
+    )
+    exports = [_make_export()]
+
+    report = generate_report(config, state, exports)
+
+    checklist = report["checklist"]
+    assert isinstance(checklist, list)
+    tasks = [item["task"] for item in checklist]  # type: ignore[index]
+    assert any("Review 2 warning(s)" in t for t in tasks)
+
+
+def test_checklist_with_emoji(tmp_path: Path) -> None:
+    """Checklist includes an emoji verification item when state.emoji_map is non-empty."""
+    config = _make_config(tmp_path)
+    state = MigrationState(emoji_map={"e1": "se1", "e2": "se2"})
+    exports = [_make_export()]
+
+    report = generate_report(config, state, exports)
+
+    checklist = report["checklist"]
+    assert isinstance(checklist, list)
+    tasks = [item["task"] for item in checklist]  # type: ignore[index]
+    assert any("Verify custom emoji" in t for t in tasks)
