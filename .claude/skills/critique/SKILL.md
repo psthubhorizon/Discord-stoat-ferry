@@ -1,22 +1,52 @@
 ---
 name: critique
-description: Review a design document across 7 dimensions before implementation. Use after brainstorming, before writing a plan.
+description: "REQUIRED for medium+ tasks: stress-test a design document before writing an implementation plan. Must run between /brainstorm and writing-plans. Skipping this is a workflow violation."
 user_invocable: true
+allowed-tools: Read, Grep, Glob
 ---
 
 # /critique — 7-Dimension Design Review
 
-Reviews a design document or plan in `docs/plans/` and produces a structured critique. Use after brainstorming, before implementation.
+Reviews a design document and produces a structured critique. Use after `/brainstorm` produces a design doc, before `writing-plans`.
+
+**The agent that designs cannot validate the design.** This skill creates a fresh-context review.
+
+## Phase 0: Prerequisite Check (MANDATORY)
+
+Before doing anything else, verify a design doc exists:
+
+1. Glob `docs/plans/designs/*.md` for files
+2. If no design files exist: **STOP. Tell the user: "No design doc found in `docs/plans/designs/`. Run `/brainstorm` first to produce a design document."**
+3. If design files exist but the user didn't specify which one, list them and ask
+
+Do NOT proceed without a design document. Do NOT critique from memory or from a spec alone.
 
 ## Input
 
-The user provides a path to a design document (e.g., `docs/plans/my-feature.md`). Read it fully before proceeding.
+The user provides a path to a design document (e.g., `docs/plans/designs/my-feature.md`). Read it fully before proceeding.
 
-If no path is given, check `docs/plans/` for the most recently modified file and confirm with the user.
+If no path is given, check `docs/plans/designs/` for the most recently modified file and confirm with the user.
 
-## The 7 Dimensions
+## Step 1: Read the Design
 
-Review the design document against each dimension. Score each: **PASS**, **CONCERN** (minor issue, non-blocking), or **BLOCK** (must fix before implementing).
+Read the design document completely. Note:
+- The stated problem and context
+- Scope (in/out)
+- Technical approach
+- Files to create/modify
+- Acceptance criteria
+- Number of tasks
+
+## Step 2: Read Referenced Code
+
+For every file listed in the "Files" section:
+- If it exists: read it to understand current state
+- If it's new: read similar existing files to understand expected patterns
+- Read any components or hooks the design says to reuse
+
+## Step 3: Critique Against Seven Dimensions
+
+Evaluate the design against each dimension. Note findings only if there are actual issues. Don't force findings where none exist.
 
 ### 1. Feasibility
 
@@ -83,8 +113,8 @@ Check for:
 
 Does the design stay within what was requested?
 
-- Compare against the brief (if one exists in `docs/plans/briefs/`)
-- Flag any requirements that appeared in the design but weren't in the brief
+- Compare against the spec (if one exists in `docs/plans/specs/`)
+- Flag any requirements that appeared in the design but weren't in the spec
 - Flag any "while we're at it" additions
 - Is there a simpler version that solves the core problem?
 
@@ -102,40 +132,70 @@ Is there a fundamentally better approach?
 ```markdown
 # Critique: <Design Document Name>
 
-## Verdict: PASS / ITERATE / RETHINK
+## Summary
+[1-2 sentence overall assessment — is this design sound?]
 
-### Summary
-<2-3 sentence overall assessment>
+## Findings
 
-### Dimension Scores
+### Critical (must fix before planning)
+- **[Finding]**: [Explanation].
+  **Suggestion**: [Specific fix or alternative]
 
-| # | Dimension | Score | Notes |
-|---|-----------|-------|-------|
-| 1 | Feasibility | PASS/CONCERN/BLOCK | ... |
-| 2 | Pattern Alignment | PASS/CONCERN/BLOCK | ... |
-| 3 | Over-Engineering | PASS/CONCERN/BLOCK | ... |
-| 4 | Missing Edge Cases | PASS/CONCERN/BLOCK | ... |
-| 5 | Type Safety | PASS/CONCERN/BLOCK | ... |
-| 6 | Scope Creep | PASS/CONCERN/BLOCK | ... |
-| 7 | Better Alternatives | PASS/CONCERN/BLOCK | ... |
+### Important (should fix)
+- **[Finding]**: [Explanation].
+  **Suggestion**: [Fix]
 
-### Detailed Findings
-<Per-dimension details for any CONCERN or BLOCK>
+### Minor (consider)
+- **[Finding]**: [Explanation].
+  **Suggestion**: [Fix]
 
-### Recommended Changes
-<Numbered list of specific changes before implementation>
+## Strengths
+- [What the design does well — be specific]
+
+## Verdict
+**[PASS / ITERATE / RETHINK]**
 ```
 
 ## Verdict Rules
 
-- **PASS**: 0 BLOCKs, <=2 CONCERNs. Proceed to implementation planning.
-- **ITERATE**: 0 BLOCKs, 3+ CONCERNs, or 1 BLOCK that's easy to fix. Revise the design and re-critique.
-- **RETHINK**: 2+ BLOCKs, or 1 BLOCK that requires fundamental redesign. Go back to brainstorming.
+- **PASS**: 0 BLOCKs/Critical, <=2 Important. Proceed to implementation planning.
+- **ITERATE**: 0 Critical, 3+ Important, or 1 Critical that's easy to fix. Revise the design and re-critique.
+- **RETHINK**: 2+ Critical, or 1 Critical that requires fundamental redesign. Go back to brainstorming.
+
+## Handoff
+
+Based on verdict:
+
+- **ITERATE**: "Design needs changes. Address the findings above, update the design doc, then re-run `/critique`."
+- **RETHINK**: "Fundamental issues. Go back to `/brainstorm` with these critique findings as input."
+
+<WORKFLOW-GATE>
+On PASS verdict only:
+
+COMPLETED: /critique (PASS)
+NEXT MANDATORY STEP: /test-scenarios (optional, recommended for Large) OR writing-plans
+
+If the task is Large: recommend invoking /test-scenarios first, then writing-plans.
+If the task is Medium: invoke writing-plans directly (superpowers:writing-plans).
+
+You MUST invoke the next step now. Do NOT:
+- Implement any code
+- Skip to building
+- Take any action other than invoking the next workflow step
+
+If the user says "go ahead", "do that", "OK", or similar — they mean "invoke the next step",
+NOT "start implementing". The workflow chain is:
+/brief -> /spec -> /brainstorm -> /critique -> [/test-scenarios] -> writing-plans -> build -> /ship
+</WORKFLOW-GATE>
 
 ## NEVERs
 
-- **Never** pass a design with unaddressed BLOCKs
-- **Never** critique without reading the full design document first
+- **Never** skip the prerequisite check — a design doc must exist before critiquing
+- **Never** critique without reading the full design document and referenced code first
 - **Never** rubber-stamp — if everything is genuinely PASS, say so, but earn it with specific observations
+- **Never** force findings — if a dimension has no issues, skip it. Fabricated findings waste time.
 - **Never** propose implementation details — this is design review, not implementation planning
 - **Never** expand scope — critique what's written, don't add requirements
+- **Never** modify the design doc — this skill is read-only. The user decides what to change.
+- **Never** skip the Scope Creep check — the most common source of wasted work
+- **Never** skip the WORKFLOW GATE — after PASS, the next step is /test-scenarios or writing-plans

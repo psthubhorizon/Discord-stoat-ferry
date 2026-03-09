@@ -25,6 +25,17 @@
     ]
   },
   "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "prompt",
+            "prompt": "A file was just modified. Remind yourself: after completing the current batch of changes, run the verification suite: uv run ruff check . && uv run ruff format --check . && uv run mypy src/ && uv run pytest. Do NOT run it after every single edit — batch your changes first."
+          }
+        ]
+      }
+    ],
     "PreCompact": [
       {
         "hooks": [

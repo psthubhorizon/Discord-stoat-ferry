@@ -1,12 +1,20 @@
 ---
 name: brief
-description: Crystallize a vague request into a concrete requirements brief. First step in the design pipeline before brainstorming.
+description: Crystallize a vague request into a concrete requirements brief. First step in the design pipeline before /spec.
 user_invocable: true
+allowed-tools: Read, Grep, Glob, Write, AskUserQuestion
 ---
 
 # /brief — Requirements Crystallization
 
-Six sequential phases. Do NOT skip any phase. Output is a brief document that feeds into `superpowers:brainstorming`.
+Seven sequential phases. Do NOT skip any phase. Output is a brief document that feeds into `/spec`.
+
+## Phase 0: Context Check (MANDATORY)
+
+Before anything else:
+1. If no task description was provided, ask: "What are you thinking about building? Dump your thoughts."
+2. If the request sounds like a **bug fix**, suggest: "This sounds like a bug. Consider using `superpowers:systematic-debugging` instead of the design pipeline."
+3. If the request is **docs-only**, suggest: "This looks like a docs change. No brief needed — just do it."
 
 ## Phase 1: Understand the Request
 
@@ -79,19 +87,33 @@ Apply the tier from CLAUDE.md:
 
 | Tier | Threshold | Next step |
 |------|-----------|-----------|
-| Trivial | <5 lines, config, doc-only, single-file bugfix | Skip brainstorming, just implement |
-| Medium | New component, 3+ files, new data wiring | Proceed to `superpowers:brainstorming` |
-| Large | New feature, architecture change, 5+ files | Proceed to `superpowers:brainstorming` |
+| Trivial | <5 lines, config, doc-only, single-file bugfix | Skip design pipeline, just implement |
+| Medium | New component, 3+ files, new data wiring | Proceed to `/spec` |
+| Large | New feature, architecture change, 5+ files | Proceed to `/spec` |
 
 **When in doubt, classify UP, not down.**
 
 ## Phase 6: Handoff
 
-Tell the user:
-- **Trivial**: "Brief complete. This is small enough to implement directly. Shall I proceed?"
-- **Medium/Large**: "Brief complete at `docs/plans/briefs/<file>`. Next step: `/brainstorm` to explore approaches, or jump to planning if the approach is obvious."
+For **Trivial** tasks: "Brief complete. This is small enough to implement directly. Shall I proceed?"
 
-Direct them to invoke `superpowers:brainstorming` next (or skip to `superpowers:writing-plans` if the approach is already clear).
+For **Medium/Large** tasks:
+
+<WORKFLOW-GATE>
+COMPLETED: /brief
+NEXT MANDATORY STEP: /spec
+
+You MUST invoke /spec now. Do NOT:
+- Implement any code
+- Start brainstorming or design
+- Skip to writing-plans
+- Invoke superpowers:brainstorming (use /brainstorm after /spec completes)
+- Take any action other than invoking /spec
+
+If the user says "go ahead", "do that", "OK", or similar — they mean "invoke /spec",
+NOT "start implementing". The workflow chain is:
+/brief -> /spec -> /brainstorm -> /critique -> [/test-scenarios] -> writing-plans -> build -> /ship
+</WORKFLOW-GATE>
 
 ## NEVERs
 
@@ -100,3 +122,5 @@ Direct them to invoke `superpowers:brainstorming` next (or skip to `superpowers:
 - **Never** skip clarifying questions for Medium/Large — assumptions kill projects
 - **Never** write the brief without Phase 2 scan results — they ground the brief in reality
 - **Never** classify DOWN when unsure — a brief that's "too thorough" wastes 5 minutes; one that's too shallow wastes hours
+- **Never** invoke `superpowers:brainstorming` — use the project-local `/brainstorm` skill (after `/spec`)
+- **Never** skip the WORKFLOW GATE for Medium/Large tasks

@@ -11,6 +11,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 - Plain English audit across all user-facing docs: define jargon on first use (CLI, JSON, API, CDN, DCE, token, terminal, developer tools), add parenthetical explanations for technical terms, use direct language throughout.
 - Comprehensive architecture doc rewrite (`docs/reference/architecture.md`): expanded from ~200 lines to ~1200 lines covering every module, data model, migration phase, API pattern, async design, and design decision.
 - Claude Code config cleanup: remove CogniLayer duplication from project CLAUDE.md (~130 lines), remove PostToolUse hook, remove redundant bash/WebFetch permissions, fix tool name typo.
+- Overhaul Claude Code workflow pipeline: enforced 8-step chain (`/brief → /spec → /brainstorm → /critique → [/test-scenarios] → writing-plans → build → /ship`) with `<WORKFLOW-GATE>` blocks and Phase 0 prerequisite checks in every skill.
+
+### Added
+
+- New `/spec` skill: transforms briefs into structured, prioritised requirements with acceptance criteria (between `/brief` and `/brainstorm`).
+- New `/brainstorm` skill: project-local design exploration replacing `superpowers:brainstorming`, with correct handoff to `/critique`.
+- New `/test-scenarios` skill: generates test scenarios from spec acceptance criteria (optional, recommended for Large tasks).
+- Key-files and security rules (`.claude/rules/key-files.md`, `.claude/rules/security.md`).
+- CogniLayer MCP wiring (`.mcp.json`, tool permissions) for two-layer memory model.
+- Change manifest pattern for `/ship` audit step (`.claude/change-manifest.md` template in CLAUDE.md).
 
 ### Fixed
 

@@ -9,7 +9,7 @@ This rule is not auto-triggered. It is referenced by the `/ship` skill and desig
 ## Pipeline
 
 ```
-/brief -> /brainstorm -> /critique -> plan -> implement -> /ship
+/brief -> /spec -> /brainstorm -> /critique -> [/test-scenarios] -> writing-plans -> build -> /ship
 ```
 
 ## Verification Command
@@ -21,7 +21,7 @@ uv run ruff check . && uv run ruff format --check . && uv run mypy src/ && uv ru
 ## Code Review Gate
 
 Mandatory for changes >20 lines of non-docs code. Dispatch chain:
-1. `superpowers:requesting-code-review`
+1. `superpowers:code-reviewer` — primary reviewer
 2. Fallback: `octo:personas:code-reviewer`
 3. Fallback: `octo:skills:octopus-code-review`
 
