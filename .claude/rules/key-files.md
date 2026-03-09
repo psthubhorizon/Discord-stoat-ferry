@@ -56,7 +56,9 @@ description: "Critical file pointers for navigating the codebase"
 | `pyproject.toml` | Version, deps, tool config |
 | `ferry.spec` | PyInstaller build spec (includes template JSON data) |
 
-## Design Documents
+## Design Documents (local-only — gitignored)
+
+All `docs/plans/` content is gitignored. These files exist locally for the design workflow but must never be committed to the public repo.
 
 | Path | Purpose |
 |------|---------|

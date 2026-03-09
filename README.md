@@ -101,7 +101,7 @@ Ferry can **pause and resume** — close it anytime, pick up where you left off.
 
 ## Contributing
 
-We welcome contributions! See [CONTRIBUTING.md](CONTRIBUTING.md).
+We welcome contributions! See [CONTRIBUTING.md](.github/CONTRIBUTING.md).
 
 ---
 

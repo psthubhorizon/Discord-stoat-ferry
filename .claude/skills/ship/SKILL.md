@@ -111,12 +111,19 @@ Update these files as applicable:
 ## Step 6: Commit and Push
 
 1. Stage specific files only — **NEVER** use `git add -A` or `git add .`
-2. Write a clear commit message (imperative mood, explain the *why*)
-3. Include Co-Authored-By trailer:
+2. **Staging safety check** — after staging, run `git diff --cached --name-only` and verify NONE of these appear:
+   - `docs/plans/` — internal design docs (gitignored)
+   - `docs/discord-ferry-claude-code-brief.md` — internal brief (gitignored)
+   - `.mcp.json` — local dev config (gitignored)
+   - `.claude/agent-memory*/` — local agent state (gitignored)
+   - `claude_log/` — session handoffs (gitignored)
+   - If any appear: **STOP. Unstage them and check `.gitignore` is intact.**
+3. Write a clear commit message (imperative mood, explain the *why*)
+4. Include Co-Authored-By trailer:
    ```
    Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
    ```
-4. Push to remote (if on a branch with upstream)
+5. Push to remote (if on a branch with upstream)
 
 ## Step 7: Harvest (CogniLayer)
 
@@ -153,6 +160,7 @@ Display:
 - **Never** amend a previous commit — always create a new one
 - **Never** skip the Harvest step — session knowledge may be lost
 - **Never** write releaseNotes for internal-only changes (N/A for this project, but keep discipline)
+- **Never** stage gitignored internal files (`docs/plans/`, `.mcp.json`, `claude_log/`, `docs/discord-ferry-claude-code-brief.md`)
 
 ## Edge Cases
 

@@ -53,7 +53,7 @@ Wait for answers before proceeding.
 
 ## Phase 4: Write the Brief
 
-Create `docs/plans/briefs/YYYY-MM-DD-<name>.md` with this structure:
+Create `docs/plans/briefs/YYYY-MM-DD-<name>.md` (gitignored — local-only, never committed to the public repo):
 
 ```markdown
 # Brief: <Name>

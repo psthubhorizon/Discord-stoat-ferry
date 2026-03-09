@@ -234,6 +234,26 @@ Invoke `/octo:tdd` when implementing any module with a corresponding test file. 
 
 The `/ship` skill (`.claude/skills/ship/SKILL.md`) is the ONLY way to commit. It runs verification, audit, code review, second opinion, documentation, harvest, and commit in sequence. Every intermediate skill has a `<WORKFLOW-GATE>` that enforces the next step.
 
+## Public Repo Hygiene
+
+This is a **public open-source repo**. Internal development artifacts must never be committed.
+
+**Gitignored (local-only, never stage or commit):**
+- `docs/plans/` — briefs, specs, designs, implementation plans (workflow output)
+- `docs/discord-ferry-claude-code-brief.md` — internal project brief
+- `.mcp.json` — local MCP server config (contains hardcoded paths)
+- `.claude/agent-memory*/` — local agent state
+- `claude_log/` — session handoffs
+- `.claude/change-manifest.md` — ephemeral shipping state
+
+**Community files live in `.github/`** (not repo root):
+- `.github/CODE_OF_CONDUCT.md`
+- `.github/CONTRIBUTING.md`
+
+GitHub auto-detects these in `.github/` — the repo tabs still show "Code of conduct" and "Contributing".
+
+**When staging files**: Always verify with `git status` that no gitignored files are being staged. If `git add` tries to stage something from `docs/plans/`, `.mcp.json`, or `claude_log/`, STOP — the `.gitignore` should prevent this. If it doesn't, the gitignore is broken and must be fixed first.
+
 ## Key Directories
 
 | Path | Purpose |
@@ -246,13 +266,9 @@ The `/ship` skill (`.claude/skills/ship/SKILL.md`) is the ONLY way to commit. It
 | `tests/` | pytest tests |
 | `tests/fixtures/` | Sample DCE JSON for testing |
 | `docs/` | MkDocs Material documentation site |
-| `docs/plans/briefs/` | Brief documents from `/brief` |
-| `docs/plans/specs/` | Spec documents from `/spec` |
-| `docs/plans/designs/` | Design documents from `/brainstorm` |
-| `docs/plans/` | Implementation plans |
+| `docs/plans/` | **Local-only** — briefs, specs, designs, plans (gitignored) |
 | `.claude/rules/` | Domain-specific rules (auto-loaded by glob) |
 | `.claude/skills/` | Workflow skills (brief, spec, brainstorm, critique, test-scenarios, ship) |
-| `claude_log/` | Session handoffs (gitignored) |
 
 # === COGNILAYER (auto-generated, do not delete) ===
 
