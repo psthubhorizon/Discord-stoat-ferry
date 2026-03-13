@@ -249,7 +249,7 @@ def setup_page() -> None:
                 ),
                 (
                     "o_check_circle",
-                    "A bot token from your Stoat server settings ",
+                    "A Stoat user token from your browser ",
                     "https://developers.stoat.chat",
                     "(how?)",
                 ),
@@ -376,20 +376,24 @@ def setup_page() -> None:
 
                 # Token
                 token_input = ui.input(
-                    label="Bot token",
-                    placeholder="Paste your bot token here",
+                    label="Stoat user token",
+                    placeholder="Paste your session token here",
                     password=True,
                     password_toggle_button=True,
                     value=str(storage.get("token", "")),
                 ).classes("w-full")
 
-                with ui.row().classes("items-center gap-1 -mt-2"):
-                    ui.icon("help_outline", size="16px").classes("text-gray-400")
-                    ui.link(
-                        "How to create a bot and get a token",
-                        "https://developers.stoat.chat",
-                        new_tab=True,
-                    ).classes("text-xs text-blue-600")
+                with ui.column().classes("gap-0 -mt-2"):
+                    ui.label(
+                        "F12 \u2192 Application \u2192 Local Storage \u2192 copy session_token"
+                    ).classes("text-xs text-gray-500")
+                    with ui.row().classes("items-center gap-1"):
+                        ui.icon("help_outline", size="16px").classes("text-gray-400")
+                        ui.link(
+                            "How to find your user token",
+                            "https://developers.stoat.chat",
+                            new_tab=True,
+                        ).classes("text-xs text-blue-600")
 
                 # Advanced options
                 with ui.expansion("Advanced Options", icon="settings").classes("w-full"):
@@ -473,7 +477,7 @@ def setup_page() -> None:
                         error_label.set_text("Stoat API URL must start with http:// or https://")
                         return
                     if not token:
-                        missing.append("Bot token")
+                        missing.append("Stoat user token")
                     if missing:
                         error_label.set_text(f"Required: {', '.join(missing)}")
                         return

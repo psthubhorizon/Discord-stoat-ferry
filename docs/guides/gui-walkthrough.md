@@ -25,7 +25,7 @@ In this mode, Ferry downloads and runs DiscordChatExporter for you automatically
 
 **Stoat API URL** — select Official (`https://api.stoat.chat`) or enter your self-hosted domain.
 
-**Stoat user token** — paste your Stoat user token (masked input).
+**Stoat user token** — paste the token you copied from your browser's developer tools (masked input). See [how to find it](../getting-started/setup-stoat.md#2-get-your-stoat-user-token). No bot or app creation needed — this is a key your browser already has.
 
 ### Offline Mode ("I already have exports")
 

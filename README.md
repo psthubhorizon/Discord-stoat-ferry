@@ -33,7 +33,7 @@ Launch Ferry. You'll need four things:
 
 - **Discord user token** + **server ID** — a token is a secret key that lets Ferry access your account. Ferry shows you how to find both.
 - **Stoat API URL** — the web address Ferry uses to talk to Stoat. Use `https://api.stoat.chat` for the official service, or your own domain if you run your own Stoat instance.
-- **Stoat user token** — your Stoat secret key. The [step-by-step guide](docs/getting-started/setup-stoat.md) shows exactly where to find it.
+- **Stoat user token** — a secret key your browser saves when you log in to Stoat. No bot or app creation needed — you just copy it from your browser. The [step-by-step guide](docs/getting-started/setup-stoat.md) shows exactly where to find it.
 
 ### Step 2: Ferry exports your server automatically
 

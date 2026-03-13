@@ -12,15 +12,15 @@ This page covers the most common problems encountered during migration, their ca
 |---|---|
 | **Symptom** | Ferry stops immediately with `401 Unauthorized` |
 | **Cause** | The token you provided is wrong, expired, or was copied incorrectly |
-| **Solution** | Get a fresh token from your Stoat web client: press F12 to open the browser's hidden developer panel, go to **Application > Local Storage** (where the browser saves website data), find your Stoat domain, and copy the `token` value. Tokens expire if you log out or change your password. |
+| **Solution** | Get a fresh token. Open Stoat in your browser, make sure you are logged in, then follow the [step-by-step token guide](../getting-started/setup-stoat.md#2-get-your-stoat-user-token) to copy a new one. Tokens expire when you log out or change your password, so you may need to do this again if it has been a while. |
 
 ### 403 Forbidden on server create
 
 | | |
 |---|---|
 | **Symptom** | Ferry reports `403 Forbidden` when attempting to create the server |
-| **Cause** | You are using a bot token instead of a user token. Bot accounts cannot create servers. |
-| **Solution** | Use your personal user token. See the [401 Unauthorized](#401-unauthorized) instructions above for where to find it. |
+| **Cause** | You may be using a bot token instead of a regular user token. Bot accounts cannot create servers on Stoat. |
+| **Solution** | Make sure you are using the token from a **regular Stoat account** — the same account you log in to when you chat. Ferry does not use bots. See the [token guide](../getting-started/setup-stoat.md#2-get-your-stoat-user-token) for how to find the right token. |
 
 ---
 

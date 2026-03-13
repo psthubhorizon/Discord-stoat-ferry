@@ -65,7 +65,7 @@ ferry migrate [OPTIONS]
 | `--discord-server TEXT` | `DISCORD_SERVER_ID` | | Discord server ID (orchestrated mode) |
 | `--export-dir PATH` | | | Path to DCE exports (offline mode) |
 | `--stoat-url TEXT` | `STOAT_URL` | *(required)* | Stoat API base URL (e.g. `https://api.stoat.chat`) |
-| `--token TEXT` | `STOAT_TOKEN` | *(required)* | Your Stoat user token |
+| `--token TEXT` | `STOAT_TOKEN` | *(required)* | Your Stoat user token (copied from your browser — see [setup guide](../getting-started/setup-stoat.md#2-get-your-stoat-user-token)) |
 | `--server-id TEXT` | | | Migrate into an existing Stoat server by ID |
 | `--server-name TEXT` | | | Name for the new server (defaults to the Discord server name) |
 | `--skip-messages` | | false | Import structure only — no messages sent |

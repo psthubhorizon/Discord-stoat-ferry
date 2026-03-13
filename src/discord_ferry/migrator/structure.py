@@ -37,7 +37,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Minimum permissions for the ferry bot to operate:
+# Minimum permissions for the Ferry account to operate:
 # ManageRole(3), ManageCustomisation(4), ViewChannel(20), ReadMessageHistory(21),
 # SendMessage(22), ManageMessages(23), SendEmbeds(26), UploadFiles(27), Masquerade(28), React(29)
 FERRY_MIN_PERMISSIONS = (

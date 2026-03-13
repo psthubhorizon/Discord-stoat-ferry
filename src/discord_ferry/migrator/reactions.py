@@ -31,7 +31,7 @@ async def run_reactions(
 
     Reactions are logged in ``state.pending_reactions`` by the messages phase as dicts with
     keys ``channel_id``, ``message_id``, and ``emoji``. Each refers to Stoat IDs, not Discord
-    IDs. No user attribution is possible — the bot account adds all reactions.
+    IDs. No user attribution is possible — the Ferry account adds all reactions.
 
     Args:
         config: Ferry configuration (stoat_url, token).

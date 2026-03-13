@@ -317,7 +317,7 @@ set, verifies the server is accessible (best-effort, non-fatal on failure).
 
 **SERVER** (Phase 3): Creates a new server via `POST /servers` (or verifies the existing one).
 Uploads the guild icon to Autumn and applies it. Sets server default permissions to
-`FERRY_MIN_PERMISSIONS` (1,022,361,624) to ensure the bot can operate.
+`FERRY_MIN_PERMISSIONS` (1,022,361,624) to ensure the Ferry account can operate.
 
 **ROLES** (Phase 4): Iterates all exports to collect unique role IDs (skipping @everyone where
 `role_id == guild_id`). Creates each role with name and British-spelled `colour`. If Discord
@@ -1019,7 +1019,7 @@ call `stream_messages()` when `metadata_only=True`).
 
 ### Why Masquerade + Idempotency-Key?
 
-Stoat has no bulk message import API. Every message must be sent individually via the bot
+Stoat has no bulk message import API. Every message must be sent individually via the Ferry
 account. Masquerade makes each message display the original Discord author's name and avatar,
 preserving conversation readability. The `Idempotency-Key` header (`ferry-{discord_msg_id}`)
 prevents duplicate messages on resume — Stoat returns the existing message if the same key

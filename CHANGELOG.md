@@ -25,7 +25,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
-- Fix "Stoat bot token" → "Stoat user token" in CLI reference, GUI walkthrough, and first migration guide.
+- Fix misleading "bot token" terminology across entire project: GUI labels, CLI help, all user-facing docs, code comments, and reference docs now consistently say "user token" with plain-English explanations for non-technical users. Expanded token setup guide with step-by-step browser instructions and Local Storage troubleshooting.
 - Exclude internal design docs (`docs/plans/`, brief) from public docs site via `exclude_docs`.
 - Add dark/light mode toggle and GitHub repo link to docs site theme.
 

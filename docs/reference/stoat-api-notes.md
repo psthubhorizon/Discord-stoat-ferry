@@ -107,7 +107,7 @@ bitmask. The authoritative list from `developers.stoat.chat`:
 | Masquerade | 28 | 268,435,456 | Required for masquerade name and avatar |
 | React | 29 | 536,870,912 | |
 
-**Ferry bot minimum permission value:**
+**Ferry account minimum permission value:**
 
 Bits 3, 4, 20, 21, 22, 23, 26, 27, 28, 29 sum to **1,022,361,624**.
 
@@ -132,7 +132,7 @@ FERRY_PERMISSIONS = (
 ## Masquerade
 
 Masquerade lets Ferry post messages that appear to come from different Discord usernames and avatars,
-preserving historical authorship even though all messages technically come from the Ferry bot.
+preserving historical authorship even though all messages technically come from the Ferry account.
 
 Payload fields:
 

@@ -82,10 +82,10 @@ This is optional. If not set, Ferry will work fine but you will need to re-enter
 
 ## Account Age
 
-Stoat may apply stricter rate limits to accounts that were created less than 72 hours ago. Use an established account (your own personal account) rather than a freshly created bot account when running Ferry.
+Stoat may apply stricter rate limits to accounts that were created less than 72 hours ago. Use an established account — your own personal account that you have been using for a while — rather than a brand-new account created just for the migration.
 
 !!! tip "Server owner is best"
-    Running Ferry with the server owner's token avoids nearly all permission-related issues. The owner automatically has all permissions on all channels.
+    Running Ferry with the server owner's token avoids nearly all permission-related issues. The owner automatically has all permissions on all channels. Remember: Ferry uses your regular user token, not a bot token.
 
 ---
 
