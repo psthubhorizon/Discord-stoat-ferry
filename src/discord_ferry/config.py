@@ -36,6 +36,8 @@ class FerryConfig:
     checkpoint_interval: int = 50
     skip_avatars: bool = False
     reaction_mode: str = "text"
+    min_thread_messages: int = 0
+    validate_after: bool = False
 
     # Discord credentials (orchestrated mode only — never persisted to disk)
     discord_token: str | None = field(default=None, repr=False)

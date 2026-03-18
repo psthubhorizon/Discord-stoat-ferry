@@ -24,7 +24,7 @@ from discord_ferry.exporter import (
     run_dce_export,
     validate_discord_token,
 )
-from discord_ferry.migrator.api import get_session
+from discord_ferry.migrator.api import api_fetch_server, get_session
 from discord_ferry.migrator.avatars import run_avatars
 from discord_ferry.migrator.connect import run_connect
 from discord_ferry.migrator.emoji import run_emoji
@@ -220,10 +220,43 @@ async def run_migration(
         )
     )
 
+    # S6: Filter threads by minimum message count
+    threads_filtered = 0
+    if config.min_thread_messages > 0:
+        filtered_exports: list[DCEExport] = []
+        for export in exports:
+            if export.is_thread and export.message_count < config.min_thread_messages:
+                threads_filtered += 1
+                state.warnings.append(
+                    {
+                        "phase": "validate",
+                        "type": "thread_filtered",
+                        "message": (
+                            f"Thread '{export.channel.name}' excluded "
+                            f"({export.message_count} messages "
+                            f"< {config.min_thread_messages} threshold)"
+                        ),
+                    }
+                )
+                on_event(
+                    MigrationEvent(
+                        phase="validate",
+                        status="warning",
+                        message=(
+                            f"Thread '{export.channel.name}' filtered out "
+                            f"({export.message_count} msgs)"
+                        ),
+                    )
+                )
+            else:
+                filtered_exports.append(export)
+        exports = filtered_exports
+
     # Pre-creation review: emit summary event and optionally wait for user confirmation
     if not config.dry_run and not config.resume:
         discord_meta = load_discord_metadata(config.output_dir)
         summary = build_review_summary(exports, discord_metadata=discord_meta)
+        summary.threads_filtered = threads_filtered
         # Log warnings for user-specific permission overrides that Stoat cannot import
         if discord_meta and discord_meta.user_override_channels:
             for uo in discord_meta.user_override_channels:
@@ -254,6 +287,7 @@ async def run_migration(
                     "has_permissions": summary.has_permissions,
                     "nsfw_channels": summary.nsfw_channel_count,
                     "user_overrides": summary.user_override_count,
+                    "threads_filtered": summary.threads_filtered,
                     "warnings": summary.warnings,
                     "reaction_mode": config.reaction_mode,
                 },
@@ -286,6 +320,64 @@ async def run_migration(
     generate_report(config, state, exports)
     save_state(state, config.output_dir)
     on_event(MigrationEvent(phase="report", status="completed", message="Migration complete"))
+
+    # Phase 12: VALIDATE_MIGRATION — optional post-migration verification
+    if config.validate_after and state.stoat_server_id:
+        state.current_phase = "validate_migration"
+        on_event(
+            MigrationEvent(
+                phase="validate_migration",
+                status="started",
+                message="Validating migration results...",
+            )
+        )
+        try:
+            async with aiohttp.ClientSession() as validation_session:
+                server = await api_fetch_server(
+                    validation_session, config.stoat_url, config.token, state.stoat_server_id
+                )
+            actual_channels = len(server.get("channels", []))
+            actual_roles = len(server.get("roles", {}))
+            expected_channels = len(state.channel_map)
+            expected_roles = len(state.role_map)
+            failed_count = len(state.failed_messages)
+
+            state.validation_results = {
+                "channels_expected": expected_channels,
+                "channels_found": actual_channels,
+                "roles_expected": expected_roles,
+                "roles_found": actual_roles,
+                "failed_messages": failed_count,
+                "passed": actual_channels == expected_channels and actual_roles == expected_roles,
+            }
+
+            if state.validation_results["passed"]:
+                msg = f"Validation passed: {actual_channels} channels, {actual_roles} roles match."
+            else:
+                msg = (
+                    f"Validation warning: expected {expected_channels} channels "
+                    f"(found {actual_channels}), expected {expected_roles} roles "
+                    f"(found {actual_roles})."
+                )
+            if failed_count:
+                msg += f" {failed_count} messages failed (see failed_message_ids in report)."
+
+            on_event(
+                MigrationEvent(
+                    phase="validate_migration",
+                    status="completed" if state.validation_results["passed"] else "warning",
+                    message=msg,
+                )
+            )
+        except Exception as exc:  # noqa: BLE001
+            on_event(
+                MigrationEvent(
+                    phase="validate_migration",
+                    status="warning",
+                    message=f"Validation skipped: {exc}",
+                )
+            )
+        save_state(state, config.output_dir)
 
     return state
 

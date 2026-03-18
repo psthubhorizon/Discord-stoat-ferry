@@ -77,6 +77,10 @@ def generate_report(
         },
     }
 
+    # Post-migration validation results
+    if state.validation_results:
+        report["validation"] = state.validation_results
+
     # Failed message tracking (dead-letter queue)
     report["failed_messages"] = len(state.failed_messages)
     report["failed_message_ids"] = [fm.discord_msg_id for fm in state.failed_messages]

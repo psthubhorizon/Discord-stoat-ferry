@@ -23,6 +23,7 @@ class ReviewSummary:
     thread_count: int
     has_permissions: bool
     nsfw_channel_count: int
+    threads_filtered: int = 0
     user_override_count: int = 0
     warnings: list[str] = field(default_factory=list)
 

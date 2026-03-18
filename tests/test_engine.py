@@ -861,3 +861,378 @@ async def test_retry_failed_mixed_results(tmp_path: Path) -> None:
     assert len(state.failed_messages) == 1
     assert state.failed_messages[0].discord_msg_id == "msg_gone"
     assert any("1 succeeded" in e.message and "1 still failed" in e.message for e in events)
+
+
+# ---------------------------------------------------------------------------
+# Post-migration validation (S7)
+# ---------------------------------------------------------------------------
+
+STOAT_URL = "https://api.test"
+STOAT_SERVER_ID = "stoat_server_123"
+
+
+async def test_validation_passes_when_counts_match(tmp_path: Path) -> None:
+    """Validation emits 'completed' when channel and role counts match."""
+    events: list[MigrationEvent] = []
+
+    async def set_server_id(
+        config: FerryConfig,
+        state: MigrationState,
+        exports: list,
+        emit: EventCallback,
+    ) -> None:
+        state.stoat_server_id = STOAT_SERVER_ID
+        state.channel_map = {"d1": "s1", "d2": "s2"}
+        state.role_map = {"r1": "sr1"}
+
+    config = _make_config(tmp_path, validate_after=True)
+    overrides = {**_NOOP_OVERRIDES, "connect": set_server_id}
+
+    with aioresponses() as m:
+        m.get(
+            f"{STOAT_URL}/servers/{STOAT_SERVER_ID}",
+            payload={
+                "channels": ["s1", "s2"],
+                "roles": {"sr1": {"name": "role1"}},
+            },
+        )
+        state = await run_migration(config, events.append, phase_overrides=overrides)
+
+    val_events = [e for e in events if e.phase == "validate_migration"]
+    assert any(e.status == "started" for e in val_events)
+    assert any(e.status == "completed" and "passed" in e.message.lower() for e in val_events)
+    assert state.validation_results["passed"] is True
+    assert state.validation_results["channels_expected"] == 2
+    assert state.validation_results["channels_found"] == 2
+    assert state.validation_results["roles_expected"] == 1
+    assert state.validation_results["roles_found"] == 1
+
+
+async def test_validation_warns_on_mismatch(tmp_path: Path) -> None:
+    """Validation emits 'warning' when channel or role counts don't match."""
+    events: list[MigrationEvent] = []
+
+    async def set_server_id(
+        config: FerryConfig,
+        state: MigrationState,
+        exports: list,
+        emit: EventCallback,
+    ) -> None:
+        state.stoat_server_id = STOAT_SERVER_ID
+        state.channel_map = {"d1": "s1", "d2": "s2", "d3": "s3"}
+        state.role_map = {"r1": "sr1"}
+
+    config = _make_config(tmp_path, validate_after=True)
+    overrides = {**_NOOP_OVERRIDES, "connect": set_server_id}
+
+    with aioresponses() as m:
+        m.get(
+            f"{STOAT_URL}/servers/{STOAT_SERVER_ID}",
+            payload={
+                "channels": ["s1", "s2"],  # expected 3, found 2
+                "roles": {"sr1": {"name": "role1"}},
+            },
+        )
+        state = await run_migration(config, events.append, phase_overrides=overrides)
+
+    val_events = [e for e in events if e.phase == "validate_migration"]
+    assert any(e.status == "warning" for e in val_events)
+    assert state.validation_results["passed"] is False
+    assert state.validation_results["channels_expected"] == 3
+    assert state.validation_results["channels_found"] == 2
+
+
+async def test_validation_skipped_when_disabled(tmp_path: Path) -> None:
+    """No validation events when validate_after is False."""
+    events: list[MigrationEvent] = []
+
+    async def set_server_id(
+        config: FerryConfig,
+        state: MigrationState,
+        exports: list,
+        emit: EventCallback,
+    ) -> None:
+        state.stoat_server_id = STOAT_SERVER_ID
+
+    config = _make_config(tmp_path, validate_after=False)
+    overrides = {**_NOOP_OVERRIDES, "connect": set_server_id}
+
+    await run_migration(config, events.append, phase_overrides=overrides)
+
+    val_events = [e for e in events if e.phase == "validate_migration"]
+    assert len(val_events) == 0
+
+
+async def test_validation_skips_on_api_failure(tmp_path: Path) -> None:
+    """API failure during validation emits a warning, doesn't crash."""
+    events: list[MigrationEvent] = []
+
+    async def set_server_id(
+        config: FerryConfig,
+        state: MigrationState,
+        exports: list,
+        emit: EventCallback,
+    ) -> None:
+        state.stoat_server_id = STOAT_SERVER_ID
+
+    config = _make_config(tmp_path, validate_after=True)
+    overrides = {**_NOOP_OVERRIDES, "connect": set_server_id}
+
+    with aioresponses() as m:
+        m.get(
+            f"{STOAT_URL}/servers/{STOAT_SERVER_ID}",
+            status=500,
+        )
+        state = await run_migration(config, events.append, phase_overrides=overrides)
+
+    val_events = [e for e in events if e.phase == "validate_migration"]
+    assert any(e.status == "warning" and "skipped" in e.message.lower() for e in val_events)
+    # Migration should still complete
+    assert state.completed_at != ""
+
+
+async def test_validation_results_stored_in_state(tmp_path: Path) -> None:
+    """Validation results are persisted in state.validation_results and state.json."""
+    events: list[MigrationEvent] = []
+
+    async def set_server_id(
+        config: FerryConfig,
+        state: MigrationState,
+        exports: list,
+        emit: EventCallback,
+    ) -> None:
+        state.stoat_server_id = STOAT_SERVER_ID
+        state.channel_map = {"d1": "s1"}
+        state.role_map = {"r1": "sr1"}
+
+    config = _make_config(tmp_path, validate_after=True)
+    overrides = {**_NOOP_OVERRIDES, "connect": set_server_id}
+
+    with aioresponses() as m:
+        m.get(
+            f"{STOAT_URL}/servers/{STOAT_SERVER_ID}",
+            payload={
+                "channels": ["s1"],
+                "roles": {"sr1": {"name": "role1"}},
+            },
+        )
+        state = await run_migration(config, events.append, phase_overrides=overrides)
+
+    assert state.validation_results != {}
+    assert state.validation_results["passed"] is True
+    assert state.validation_results["failed_messages"] == 0
+
+    # Verify it's persisted to state.json
+    state_path = tmp_path / "state.json"
+    assert state_path.exists()
+    saved = json.loads(state_path.read_text(encoding="utf-8"))
+    assert saved["validation_results"]["passed"] is True
+
+
+# ---------------------------------------------------------------------------
+# S6: Thread filtering by minimum message count
+# ---------------------------------------------------------------------------
+
+
+def _write_thread_json(
+    export_dir: Path,
+    *,
+    parent_channel: str = "general",
+    thread_name: str = "my-thread",
+    thread_id: str = "t1",
+    message_count: int = 3,
+) -> Path:
+    """Write a DCE JSON file with a three-segment (thread) filename."""
+    msgs = [_dce_msg_dict(f"m{i}") for i in range(message_count)]
+    data = {
+        "guild": {"id": "guild1", "name": "Test Guild", "iconUrl": ""},
+        "channel": {
+            "id": thread_id,
+            "type": 11,
+            "name": thread_name,
+            "categoryId": "",
+            "category": "",
+            "topic": "",
+        },
+        "dateRange": {"after": None, "before": None},
+        "exportedAt": "2024-01-01T00:00:00+00:00",
+        "messageCount": message_count,
+        "messages": msgs,
+    }
+    # Three-segment filename triggers is_thread=True in the parser
+    path = export_dir / f"Test Guild - {parent_channel} - {thread_name} [{thread_id}].json"
+    path.write_text(json.dumps(data), encoding="utf-8")
+    return path
+
+
+def _write_channel_json(
+    export_dir: Path,
+    *,
+    channel_name: str = "general",
+    channel_id: str = "ch1",
+    message_count: int = 10,
+) -> Path:
+    """Write a DCE JSON file with a two-segment (regular channel) filename."""
+    msgs = [_dce_msg_dict(f"m{i}") for i in range(message_count)]
+    data = {
+        "guild": {"id": "guild1", "name": "Test Guild", "iconUrl": ""},
+        "channel": {
+            "id": channel_id,
+            "type": 0,
+            "name": channel_name,
+            "categoryId": "",
+            "category": "",
+            "topic": "",
+        },
+        "dateRange": {"after": None, "before": None},
+        "exportedAt": "2024-01-01T00:00:00+00:00",
+        "messageCount": message_count,
+        "messages": msgs,
+    }
+    path = export_dir / f"Test Guild - {channel_name} [{channel_id}].json"
+    path.write_text(json.dumps(data), encoding="utf-8")
+    return path
+
+
+async def test_thread_below_threshold_excluded(tmp_path: Path) -> None:
+    """Thread with fewer messages than threshold is excluded from exports."""
+    export_dir = tmp_path / "exports"
+    export_dir.mkdir()
+    output_dir = tmp_path / "output"
+
+    _write_channel_json(export_dir, channel_name="general", channel_id="ch1", message_count=20)
+    _write_thread_json(
+        export_dir,
+        parent_channel="general",
+        thread_name="small-thread",
+        thread_id="t1",
+        message_count=3,
+    )
+
+    events: list[MigrationEvent] = []
+    config = _make_config(
+        output_dir,
+        export_dir=export_dir,
+        min_thread_messages=5,
+    )
+    await run_migration(config, events.append, phase_overrides=_NOOP_OVERRIDES)
+
+    # The review event should show the thread was filtered
+    review_events = [e for e in events if e.phase == "review" and e.status == "confirm"]
+    assert len(review_events) == 1
+    detail = review_events[0].detail
+    assert detail is not None
+    assert detail["threads_filtered"] == 1
+
+    # Filtered thread warning event should be emitted
+    filter_warnings = [
+        e
+        for e in events
+        if e.phase == "validate" and e.status == "warning" and "filtered out" in e.message
+    ]
+    assert len(filter_warnings) == 1
+    assert "small-thread" in filter_warnings[0].message
+
+
+async def test_regular_channel_never_filtered(tmp_path: Path) -> None:
+    """Regular channels are never filtered regardless of message count or threshold."""
+    export_dir = tmp_path / "exports"
+    export_dir.mkdir()
+    output_dir = tmp_path / "output"
+
+    # Regular channel with only 1 message — should NOT be filtered even with high threshold
+    _write_channel_json(export_dir, channel_name="quiet", channel_id="ch1", message_count=1)
+
+    events: list[MigrationEvent] = []
+    config = _make_config(
+        output_dir,
+        export_dir=export_dir,
+        min_thread_messages=100,
+    )
+    await run_migration(config, events.append, phase_overrides=_NOOP_OVERRIDES)
+
+    # No thread filtering warnings
+    filter_warnings = [
+        e
+        for e in events
+        if e.phase == "validate" and e.status == "warning" and "filtered out" in e.message
+    ]
+    assert len(filter_warnings) == 0
+
+    # Review shows 0 threads filtered
+    review_events = [e for e in events if e.phase == "review" and e.status == "confirm"]
+    assert len(review_events) == 1
+    assert review_events[0].detail is not None
+    assert review_events[0].detail["threads_filtered"] == 0
+
+
+async def test_min_thread_messages_zero_includes_all(tmp_path: Path) -> None:
+    """Default min_thread_messages=0 includes all threads regardless of message count."""
+    export_dir = tmp_path / "exports"
+    export_dir.mkdir()
+    output_dir = tmp_path / "output"
+
+    _write_channel_json(export_dir, channel_name="general", channel_id="ch1", message_count=10)
+    _write_thread_json(
+        export_dir,
+        parent_channel="general",
+        thread_name="tiny-thread",
+        thread_id="t1",
+        message_count=1,
+    )
+
+    events: list[MigrationEvent] = []
+    config = _make_config(
+        output_dir,
+        export_dir=export_dir,
+        min_thread_messages=0,
+    )
+    state = await run_migration(config, events.append, phase_overrides=_NOOP_OVERRIDES)
+
+    # No filtering warnings
+    filter_warnings = [
+        e
+        for e in events
+        if e.phase == "validate" and e.status == "warning" and "filtered out" in e.message
+    ]
+    assert len(filter_warnings) == 0
+
+    # Review should show the thread is present (thread_count >= 1)
+    review_events = [e for e in events if e.phase == "review" and e.status == "confirm"]
+    assert len(review_events) == 1
+    assert review_events[0].detail is not None
+    assert review_events[0].detail["threads"] >= 1
+    assert review_events[0].detail["threads_filtered"] == 0
+
+
+async def test_filtered_threads_logged_to_warnings(tmp_path: Path) -> None:
+    """Filtered threads are recorded in state.warnings with the correct structure."""
+    export_dir = tmp_path / "exports"
+    export_dir.mkdir()
+    output_dir = tmp_path / "output"
+
+    _write_channel_json(export_dir, channel_name="general", channel_id="ch1", message_count=10)
+    _write_thread_json(
+        export_dir,
+        parent_channel="general",
+        thread_name="low-activity",
+        thread_id="t1",
+        message_count=2,
+    )
+
+    events: list[MigrationEvent] = []
+    config = _make_config(
+        output_dir,
+        export_dir=export_dir,
+        min_thread_messages=5,
+    )
+    state = await run_migration(config, events.append, phase_overrides=_NOOP_OVERRIDES)
+
+    # Find the thread_filtered warning in state
+    thread_warnings = [w for w in state.warnings if w.get("type") == "thread_filtered"]
+    assert len(thread_warnings) == 1
+    w = thread_warnings[0]
+    assert w["phase"] == "validate"
+    assert "low-activity" in w["message"]
+    assert "2 messages" in w["message"]
+    assert "< 5 threshold" in w["message"]

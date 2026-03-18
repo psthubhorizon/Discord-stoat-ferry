@@ -191,3 +191,14 @@ def test_user_override_count_zero_when_no_overrides() -> None:
     )
     summary = build_review_summary(exports, discord_metadata=meta)
     assert summary.user_override_count == 0
+
+
+def test_review_summary_threads_filtered() -> None:
+    """ReviewSummary.threads_filtered defaults to 0 and is settable."""
+    exports = [_make_export()]
+    summary = build_review_summary(exports)
+    # Default is 0
+    assert summary.threads_filtered == 0
+    # Engine sets it after building the summary
+    summary.threads_filtered = 3
+    assert summary.threads_filtered == 3

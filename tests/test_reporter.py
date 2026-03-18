@@ -510,3 +510,42 @@ def test_report_includes_failed_message_count_and_ids(tmp_path: Path) -> None:
 
     assert report["failed_messages"] == 2
     assert set(report["failed_message_ids"]) == {"msg1", "msg2"}  # type: ignore[arg-type]
+
+
+# ---------------------------------------------------------------------------
+# Post-migration validation results (S7)
+# ---------------------------------------------------------------------------
+
+
+def test_report_includes_validation_results(tmp_path: Path) -> None:
+    """Report includes 'validation' key when state has validation_results."""
+    config = _make_config(tmp_path)
+    state = MigrationState(
+        validation_results={
+            "channels_expected": 5,
+            "channels_found": 5,
+            "roles_expected": 2,
+            "roles_found": 2,
+            "failed_messages": 0,
+            "passed": True,
+        }
+    )
+    exports = [_make_export()]
+
+    report = generate_report(config, state, exports)
+
+    assert "validation" in report
+    assert report["validation"]["passed"] is True
+    assert report["validation"]["channels_expected"] == 5
+    assert report["validation"]["channels_found"] == 5
+
+
+def test_report_no_validation_when_empty(tmp_path: Path) -> None:
+    """Report does not include 'validation' key when validation_results is empty."""
+    config = _make_config(tmp_path)
+    state = MigrationState()  # validation_results defaults to {}
+    exports = [_make_export()]
+
+    report = generate_report(config, state, exports)
+
+    assert "validation" not in report
