@@ -149,3 +149,118 @@ async def test_everyone_deny_view_channel_produces_stoat_deny_bit() -> None:
     assert ch_meta.default_override.deny & stoat_view_channel, (
         f"Expected Stoat ViewChannel deny bit (1<<20), got {ch_meta.default_override.deny}"
     )
+
+
+def test_user_override_channels_roundtrip(tmp_path: Path) -> None:
+    """user_override_channels persists through save/load cycle."""
+    overrides = [
+        {"channel_id": "ch1", "channel_name": "general", "override_count": 3},
+        {"channel_id": "ch2", "channel_name": "mods", "override_count": 1},
+    ]
+    meta = DiscordMetadata(
+        guild_id="111",
+        fetched_at="2026-03-01T00:00:00Z",
+        server_default_permissions=0,
+        role_permissions={},
+        channel_metadata={},
+        user_override_channels=overrides,
+    )
+    save_discord_metadata(meta, tmp_path)
+    loaded = load_discord_metadata(tmp_path)
+    assert loaded is not None
+    assert len(loaded.user_override_channels) == 2
+    assert loaded.user_override_channels[0]["channel_id"] == "ch1"
+    assert loaded.user_override_channels[0]["override_count"] == 3
+    assert loaded.user_override_channels[1]["channel_name"] == "mods"
+
+
+def test_user_override_channels_empty_by_default(tmp_path: Path) -> None:
+    """user_override_channels defaults to empty list."""
+    meta = DiscordMetadata(
+        guild_id="g",
+        fetched_at="t",
+        server_default_permissions=0,
+        role_permissions={},
+        channel_metadata={},
+    )
+    assert meta.user_override_channels == []
+    save_discord_metadata(meta, tmp_path)
+    loaded = load_discord_metadata(tmp_path)
+    assert loaded is not None
+    assert loaded.user_override_channels == []
+
+
+def test_user_override_channels_backward_compat(tmp_path: Path) -> None:
+    """Loading old metadata without user_override_channels field returns empty list."""
+    import json
+
+    old_data = {
+        "guild_id": "111",
+        "fetched_at": "t",
+        "server_default_permissions": 0,
+        "role_permissions": {},
+        "channel_metadata": {},
+        # No user_override_channels key — old format
+    }
+    (tmp_path / "discord_metadata.json").write_text(json.dumps(old_data), encoding="utf-8")
+    loaded = load_discord_metadata(tmp_path)
+    assert loaded is not None
+    assert loaded.user_override_channels == []
+
+
+async def test_user_overrides_counted_in_fetch() -> None:
+    """fetch_and_translate_guild_metadata counts user overrides per channel."""
+    from aioresponses import aioresponses
+
+    guild_id = "999000000000000001"
+
+    mock_roles = [
+        {
+            "id": guild_id,
+            "name": "@everyone",
+            "permissions": "0",
+            "position": 0,
+            "color": 0,
+            "hoist": False,
+            "managed": False,
+        },
+    ]
+
+    mock_channels = [
+        {
+            "id": "ch1",
+            "name": "general",
+            "type": 0,
+            "nsfw": False,
+            "permission_overwrites": [
+                {"id": "user1", "type": 1, "allow": "0", "deny": "1024"},
+                {"id": "user2", "type": 1, "allow": "0", "deny": "1024"},
+                {"id": guild_id, "type": 0, "allow": "0", "deny": "0"},
+            ],
+        },
+        {
+            "id": "ch2",
+            "name": "no-overrides",
+            "type": 0,
+            "nsfw": False,
+            "permission_overwrites": [],
+        },
+    ]
+
+    with aioresponses() as m:
+        m.get(
+            f"https://discord.com/api/v10/guilds/{guild_id}/roles",
+            payload=mock_roles,
+        )
+        m.get(
+            f"https://discord.com/api/v10/guilds/{guild_id}/channels",
+            payload=mock_channels,
+        )
+
+        async with aiohttp.ClientSession() as session:
+            meta = await fetch_and_translate_guild_metadata(session, "test-token", guild_id)
+
+    assert len(meta.user_override_channels) == 1
+    assert meta.user_override_channels[0]["channel_id"] == "ch1"
+    assert meta.user_override_channels[0]["channel_name"] == "general"
+    assert meta.user_override_channels[0]["override_count"] == 2
