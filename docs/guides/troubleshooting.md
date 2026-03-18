@@ -121,6 +121,74 @@ xattr -d com.apple.quarantine /Applications/ferry
 
 ---
 
+## Circuit Breaker Pausing
+
+### Circuit breaker open
+
+| | |
+|---|---|
+| **Symptom** | Logs show "Circuit breaker open" and migration pauses for 30 seconds |
+| **Cause** | The Stoat API has failed 5 times in a row. Ferry's circuit breaker activates to avoid hammering a struggling server. |
+| **Solution** | Ferry will automatically retry after 30 seconds with exponential backoff. If this keeps happening, check that your Stoat instance is running and reachable. On self-hosted instances, check the Stoat server logs for errors. |
+
+---
+
+## CDN and Attachment Issues
+
+### Expired CDN URLs
+
+| | |
+|---|---|
+| **Symptom** | Ferry warns "X attachment URLs have expired" during validation |
+| **Cause** | Your DCE export is more than 24 hours old and was created without the `--media` flag. Discord CDN links expire, so the URLs in the export no longer work. |
+| **Solution** | Re-export from DiscordChatExporter with the `--media` flag. This downloads all files locally so they do not depend on Discord's CDN. |
+
+### Attachment overflow
+
+| | |
+|---|---|
+| **Symptom** | Messages in Stoat show `[+N more attachments not migrated]` at the end |
+| **Cause** | The original Discord message had more than 5 attachments. Stoat allows a maximum of 5 attachments per message — this is a platform limit, not a Ferry bug. |
+| **Solution** | No action needed. The first 5 attachments are migrated. The overflow note tells you how many were left out. |
+
+---
+
+## Permission and Role Issues
+
+### Per-member overrides skipped
+
+| | |
+|---|---|
+| **Symptom** | Ferry warns "per-member overrides skipped" during structure creation |
+| **Cause** | Discord allows channel-level permission overrides for individual users. Stoat only supports per-role overrides, so user-specific permissions cannot be migrated directly. |
+| **Solution** | As a workaround, create single-user roles on your Stoat server for any users who need individual channel permissions, then assign those roles manually after migration. |
+
+---
+
+## Avatar Issues
+
+### Avatar pre-flight shows 0 uploads
+
+| | |
+|---|---|
+| **Symptom** | Avatar pre-flight reports "0 of N avatars uploaded" |
+| **Cause** | Your DCE export does not include local avatar files. This happens when the export was created without the `--media` flag, so avatar URLs point to Discord's CDN instead of local files. |
+| **Solution** | Re-export from DiscordChatExporter with the `--media` flag. Ferry will then upload the locally downloaded avatar files. |
+
+---
+
+## Post-Migration Validation
+
+### Validation count mismatches
+
+| | |
+|---|---|
+| **Symptom** | Post-migration validation warns about count differences between source and Stoat (e.g., "expected 25 channels, found 23") |
+| **Cause** | Some channels or roles were not created during migration, likely due to errors during the structure creation phase. |
+| **Solution** | Check the migration report (`migration_report.md` in your output directory) for specific errors. You can re-run the migration with `--resume` to retry failed items, or create the missing channels/roles manually on Stoat. |
+
+---
+
 ## Getting More Help
 
 If your issue is not listed here:

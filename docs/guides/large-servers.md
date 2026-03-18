@@ -113,3 +113,62 @@ If emoji fidelity matters, raise the `server_emoji` limit on a self-hosted insta
     ```bash
     tail -f ferry.log
     ```
+
+---
+
+## Thread Filtering
+
+For servers with hundreds of threads, many may contain only a few messages. Use `min_thread_messages` (default 0) to exclude low-activity threads and stay within Stoat's 200-channel limit:
+
+=== "GUI"
+    On the Setup screen, expand **Advanced Options** and set the **Min thread messages** field. Threads with fewer messages than this threshold are skipped.
+
+=== "CLI"
+    ```bash
+    ferry migrate ~/exports/my-discord-server/ \
+      --stoat-url https://api.stoat.chat \
+      --token your_token_here \
+      --min-thread-messages 5
+    ```
+
+!!! tip "Find the right threshold"
+    Run `ferry validate` first — the counts table shows thread message counts. Setting `min_thread_messages=5` is a good starting point, skipping threads that are essentially empty.
+
+---
+
+## Reaction Mode
+
+By default, Ferry uses `reaction_mode='text'`, which appends reaction counts to the end of message content instead of making individual API calls per reaction. This is dramatically faster for large servers.
+
+| Mode | Behavior | Speed |
+|------|----------|-------|
+| `text` (default) | Reactions shown as text at end of message (e.g., "Reactions: :thumbsup: 3, :heart: 1") | Fastest — no extra API calls |
+| `native` | Reactions added via Stoat API (without per-user attribution) | Slow — one API call per unique reaction per message |
+| `skip` | Reactions not migrated at all | Fastest — no processing |
+
+For a 10,000-message server with 20,000 reactions, `text` mode saves roughly 5 hours compared to `native` mode.
+
+=== "CLI"
+    ```bash
+    ferry migrate ~/exports/my-discord-server/ \
+      --stoat-url https://api.stoat.chat \
+      --token your_token_here \
+      --reaction-mode text
+    ```
+
+---
+
+## Checkpoint Tuning
+
+Ferry saves migration state every 50 messages by default (`checkpoint_interval=50`). For very large servers (100,000+ messages), you can increase this to reduce disk I/O overhead:
+
+=== "CLI"
+    ```bash
+    ferry migrate ~/exports/my-discord-server/ \
+      --stoat-url https://api.stoat.chat \
+      --token your_token_here \
+      --checkpoint-interval 200
+    ```
+
+!!! info "Trade-off"
+    A higher checkpoint interval means faster throughput but slightly more re-work if the migration is interrupted — Ferry will replay up to `checkpoint_interval` messages on resume. For most large migrations, 200 is a good balance.

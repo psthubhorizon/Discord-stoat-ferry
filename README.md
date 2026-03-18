@@ -83,6 +83,15 @@ Ferry can **pause and resume** — close it anytime, pick up where you left off.
 | Original timestamps | Shown in message text, not metadata |
 | Pre-creation review | Summary and confirmation before anything is created on Stoat |
 | Server blueprints | Export migration structure as reusable JSON templates |
+| Avatar pre-flight | Uploads author avatars before message migration begins |
+| CDN URL validation | Detects expired Discord attachment URLs before migration |
+| Dead-letter queue | Failed messages tracked and retryable without re-running |
+| Configurable reactions | Text summary (default), native API, or skip — per migration |
+| Discord link rewriting | Jump links and invite URLs annotated for Stoat context |
+| Circuit breaker | Exponential backoff prevents indefinite blocking on API failures |
+| Post-migration validation | Verifies Stoat server matches source after migration |
+| Markdown report | Human-readable `migration_report.md` generated after migration |
+| Server banner migration | Supported |
 
 ---
 
@@ -96,6 +105,8 @@ Ferry can **pause and resume** — close it anytime, pick up where you left off.
 - [Migrating large servers (100k+ messages)](docs/guides/large-servers.md)
 - [Self-hosted tips](docs/guides/self-hosted-tips.md)
 - [Troubleshooting](docs/guides/troubleshooting.md)
+- [Pre-Flight Checklist](docs/guides/pre-flight-checklist.md)
+- [Known Limitations](docs/guides/known-limitations.md)
 
 ---
 

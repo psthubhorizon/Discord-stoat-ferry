@@ -56,6 +56,17 @@ Ferry can **pause and resume** — close it anytime and pick up where you left o
 | Original timestamps | Shown in message text, not metadata |
 | Pre-creation review | Supported — summary and confirmation before anything is created on Stoat |
 | Server blueprints | Supported — export your server's channel and role structure as a reusable template file |
+| Avatar pre-flight | Supported — uploads author avatars before migration, with CDN fallback for missing files |
+| Dead-letter queue | Supported — failed messages tracked and retryable without re-running the full migration |
+| Configurable reactions | Supported — text summary (default), native API calls, or skip entirely |
+| Discord link rewriting | Supported — jump links and invite URLs annotated for Stoat context |
+| Circuit breaker | Supported — exponential backoff prevents indefinite blocking on Stoat API failures |
+| Thread filtering | Supported — exclude low-activity threads by minimum message count |
+| Post-migration validation | Supported — verifies Stoat server structure matches the source |
+| Markdown report | Supported — human-readable `migration_report.md` generated after migration |
+| Server banner migration | Supported |
+| Forum post index channels | Supported — index channel created per forum category listing all posts |
+| CDN URL validation | Supported — detects expired Discord attachment URLs before migration starts |
 
 ---
 
@@ -66,6 +77,8 @@ Ferry can **pause and resume** — close it anytime and pick up where you left o
 - [Large Servers](guides/large-servers.md) — tips for 100k+ message migrations
 - [Self-Hosted Tips](guides/self-hosted-tips.md) — raising limits, custom configuration
 - [Troubleshooting](guides/troubleshooting.md) — common issues and solutions
+- [Pre-Flight Checklist](guides/pre-flight-checklist.md) — verify your setup before migrating
+- [Known Limitations](guides/known-limitations.md) — platform constraints and unsupported features
 
 ## Reference
 
