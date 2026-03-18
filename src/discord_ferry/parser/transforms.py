@@ -1,10 +1,15 @@
 """Content transformation: markdown, mentions, emoji, spoilers, embeds."""
 
+import logging
 import re
 from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+from discord_ferry.parser.dce_parser import check_cdn_url_expiry
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Private helpers
@@ -225,6 +230,21 @@ def flatten_embed(
                     if candidate.exists():
                         media_path = candidate
                         break
+
+    # Check remote Discord CDN URLs for expiry (only if no local file was found).
+    if media_path is None:
+        for media_key in ("thumbnail", "image"):
+            media_obj = embed.get(media_key)
+            if isinstance(media_obj, dict):
+                media_url = media_obj.get("url", "")
+                if (
+                    isinstance(media_url, str)
+                    and media_url.startswith(("http://", "https://"))
+                    and ("cdn.discordapp.com" in media_url or "media.discordapp.net" in media_url)
+                    and check_cdn_url_expiry(media_url) is True
+                ):
+                    logger.warning("Expired embed media URL stripped: %s", media_url)
+                    break  # Don't set media_path — expired URL stripped
 
     return result, media_path
 

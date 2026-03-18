@@ -572,3 +572,64 @@ def test_strip_underline_not_dunder() -> None:
 def test_strip_underline_mixed() -> None:
     content = "__underlined__ and `__code__`"
     assert strip_underline(content) == "**underlined** and `__code__`"
+
+
+# ---------------------------------------------------------------------------
+# flatten_embed — CDN URL expiry validation (S5)
+# ---------------------------------------------------------------------------
+
+
+def test_expired_cdn_embed_media_stripped() -> None:
+    """Expired Discord CDN thumbnail — media_path is None."""
+    embed: dict[str, object] = {
+        "title": "Post",
+        "thumbnail": {"url": "https://cdn.discordapp.com/img.png?ex=60000000"},
+    }
+    result, media_path = flatten_embed(embed)
+    assert media_path is None
+
+
+def test_valid_cdn_embed_url_not_stripped() -> None:
+    """Valid CDN URL — media_path still None (remote, not local) but no warning."""
+    embed: dict[str, object] = {
+        "image": {"url": "https://cdn.discordapp.com/img.png?ex=ffffffff"},
+    }
+    result, media_path = flatten_embed(embed)
+    assert media_path is None  # Still None — it's remote
+
+
+def test_non_discord_embed_url_untouched() -> None:
+    """Non-Discord URL passes through."""
+    embed: dict[str, object] = {
+        "thumbnail": {"url": "https://example.com/img.png"},
+    }
+    result, media_path = flatten_embed(embed)
+    assert media_path is None
+
+
+def test_local_media_path_still_works(tmp_path: Path) -> None:
+    """Local media extraction unchanged."""
+    local = tmp_path / "media" / "img.png"
+    local.parent.mkdir(parents=True, exist_ok=True)
+    local.write_bytes(b"PNG")
+    embed: dict[str, object] = {"image": {"url": "media/img.png"}}
+    result, media_path = flatten_embed(embed, export_dir=tmp_path)
+    assert media_path == local
+
+
+def test_unknown_cdn_format_preserved() -> None:
+    """Discord CDN URL without ex param — not stripped."""
+    embed: dict[str, object] = {
+        "thumbnail": {"url": "https://cdn.discordapp.com/img.png"},
+    }
+    result, media_path = flatten_embed(embed)
+    assert media_path is None  # Remote, but no expiry warning
+
+
+def test_media_discordapp_net_checked() -> None:
+    """media.discordapp.net recognized as Discord CDN."""
+    embed: dict[str, object] = {
+        "image": {"url": "https://media.discordapp.net/img.png?ex=60000000"},
+    }
+    result, media_path = flatten_embed(embed)
+    assert media_path is None  # Expired, stripped
