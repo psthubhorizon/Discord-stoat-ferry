@@ -65,7 +65,7 @@ ferry migrate [OPTIONS]
 | `--discord-server TEXT` | `DISCORD_SERVER_ID` | | Discord server ID (orchestrated mode) |
 | `--export-dir PATH` | | | Path to DCE exports (offline mode) |
 | `--stoat-url TEXT` | `STOAT_URL` | *(required)* | Stoat API base URL (e.g. `https://api.stoat.chat`) |
-| `--token TEXT` | `STOAT_TOKEN` | *(required)* | Your Stoat user token |
+| `--token TEXT` | `STOAT_TOKEN` | *(required)* | Your Stoat user token (copied from your browser — see [setup guide](../getting-started/setup-stoat.md#2-get-your-stoat-user-token)) |
 | `--server-id TEXT` | | | Migrate into an existing Stoat server by ID |
 | `--server-name TEXT` | | | Name for the new server (defaults to the Discord server name) |
 | `--skip-messages` | | false | Import structure only — no messages sent |
@@ -97,6 +97,21 @@ STOAT_TOKEN=your_stoat_token_here
 
 !!! tip
     Add `.env` to your `.gitignore` if you keep your project under version control.
+
+---
+
+### Engine Configuration
+
+These options are available in the migration engine but not yet exposed as CLI flags. They can be set programmatically or will be added as CLI options in a future release:
+
+| Config Field | Default | Description |
+|---|---|---|
+| `checkpoint_interval` | 50 | State save frequency (every N messages) |
+| `skip_avatars` | False | Skip avatar pre-flight phase |
+| `reaction_mode` | "text" | Reaction strategy: "text", "native", or "skip" |
+| `min_thread_messages` | 0 | Exclude threads below this message count |
+| `validate_after` | False | Run post-migration validation |
+| `max_concurrent_requests` | 5 | API concurrency limit |
 
 ---
 

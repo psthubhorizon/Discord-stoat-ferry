@@ -37,6 +37,9 @@ nav:
     - CLI Reference: guides/cli-reference.md
     - Large Servers: guides/large-servers.md
     - Self-Hosted Tips: guides/self-hosted-tips.md
+    - Timestamp Preservation: guides/timestamps.md
+    - Known Limitations: guides/known-limitations.md
+    - Pre-Flight Checklist: guides/pre-flight-checklist.md
     - Troubleshooting: guides/troubleshooting.md
   - Reference:
     - Architecture: reference/architecture.md

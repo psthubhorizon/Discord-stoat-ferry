@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+import random
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 import aiohttp  # noqa: TCH002
@@ -15,8 +18,34 @@ if TYPE_CHECKING:
 
     from discord_ferry.config import FerryConfig
 
+logger = logging.getLogger(__name__)
+
 MAX_API_RETRIES = 3
 _RETRYABLE_STATUSES = {429, 502, 503, 504}
+
+_CIRCUIT_THRESHOLD = 5
+_CIRCUIT_PAUSE_SECONDS = 30
+
+
+@dataclass
+class _CircuitState:
+    consecutive_failures: int = 0
+
+
+# Module-level state — safe for single-migration-per-process model.
+_circuit_state = _CircuitState()
+_request_semaphore: asyncio.Semaphore | None = None
+
+
+def _reset_circuit_state() -> None:
+    """Reset circuit breaker state. Called by test fixtures."""
+    _circuit_state.consecutive_failures = 0
+
+
+def init_request_semaphore(max_concurrent: int = 5) -> None:
+    """Initialize the request concurrency semaphore."""
+    global _request_semaphore  # noqa: PLW0603
+    _request_semaphore = asyncio.Semaphore(max(max_concurrent, 1))
 
 
 @asynccontextmanager
@@ -39,8 +68,14 @@ async def _api_request(
     url: str,
     token: str,
     json_data: dict[str, Any] | None = None,
+    *,
+    extra_headers: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Make an authenticated API request with retry on 429/5xx.
+
+    Delegates to :func:`_api_request_inner` for the actual work, optionally
+    wrapping the call with the concurrency semaphore when one has been
+    initialised via :func:`init_request_semaphore`.
 
     Args:
         session: An active aiohttp ClientSession.
@@ -48,6 +83,7 @@ async def _api_request(
         url: Full URL for the request.
         token: Stoat session token for the x-session-token header.
         json_data: Optional JSON body. Not sent for GET requests.
+        extra_headers: Additional HTTP headers to merge into the request.
 
     Returns:
         Parsed JSON response as a dict.
@@ -55,41 +91,83 @@ async def _api_request(
     Raises:
         MigrationError: On non-retryable errors or when all retries are exhausted.
     """
+    if _request_semaphore is not None:
+        async with _request_semaphore:
+            return await _api_request_inner(
+                session, method, url, token, json_data, extra_headers=extra_headers
+            )
+    return await _api_request_inner(
+        session, method, url, token, json_data, extra_headers=extra_headers
+    )
+
+
+async def _api_request_inner(
+    session: aiohttp.ClientSession,
+    method: str,
+    url: str,
+    token: str,
+    json_data: dict[str, Any] | None = None,
+    *,
+    extra_headers: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    """Core request logic with exponential backoff and circuit breaker."""
     headers = _headers(token)
+    if extra_headers:
+        headers.update(extra_headers)
     # Don't send a JSON body for GET requests even if one is accidentally provided.
     body = json_data if method.upper() != "GET" else None
+
+    # Circuit breaker check: pause and reset if too many consecutive failures.
+    if _circuit_state.consecutive_failures >= _CIRCUIT_THRESHOLD:
+        logger.warning(
+            "Circuit breaker open: %d consecutive failures. Pausing %ds.",
+            _circuit_state.consecutive_failures,
+            _CIRCUIT_PAUSE_SECONDS,
+        )
+        await asyncio.sleep(_CIRCUIT_PAUSE_SECONDS)
+        _circuit_state.consecutive_failures = 0
 
     for attempt in range(MAX_API_RETRIES):
         try:
             async with session.request(method, url, json=body, headers=headers) as resp:
                 if resp.status in (200, 201):
+                    _circuit_state.consecutive_failures = 0
                     return await resp.json()  # type: ignore[no-any-return]
                 if resp.status == 204:
+                    _circuit_state.consecutive_failures = 0
                     return {}
 
                 if resp.status in _RETRYABLE_STATUSES:
                     if attempt == MAX_API_RETRIES - 1:
                         text = await resp.text()
+                        _circuit_state.consecutive_failures += 1
                         raise MigrationError(
                             f"API request failed after {MAX_API_RETRIES} retries: "
                             f"{resp.status} {text}"
                         )
                     if resp.status == 429:
+                        # Rate-limited — NOT a circuit-breaker failure.
                         body_data: dict[str, Any] = await resp.json()
                         retry_ms = body_data.get("retry_after", 1000)
                         await asyncio.sleep(retry_ms / 1000)
                     else:
-                        await asyncio.sleep(2)
+                        # 5xx — exponential backoff with jitter.
+                        delay = min(2**attempt, 60) + random.uniform(0.1, 0.5)
+                        await asyncio.sleep(delay)
+                        _circuit_state.consecutive_failures += 1
                     continue
 
                 text = await resp.text()
                 raise MigrationError(f"API error {resp.status}: {text}")
         except aiohttp.ClientError as exc:
             if attempt == MAX_API_RETRIES - 1:
+                _circuit_state.consecutive_failures += 1
                 raise MigrationError(
                     f"Network error after {MAX_API_RETRIES} retries: {exc}"
                 ) from exc
-            await asyncio.sleep(2)
+            delay = min(2**attempt, 60) + random.uniform(0.1, 0.5)
+            await asyncio.sleep(delay)
+            _circuit_state.consecutive_failures += 1
 
     # Unreachable, but satisfies mypy.
     raise MigrationError(f"API request failed after {MAX_API_RETRIES} retries")
@@ -208,52 +286,30 @@ async def api_edit_role(
     return await _api_request(session, "PATCH", url, token, kwargs)
 
 
-async def api_create_category(
+async def api_upsert_categories(
     session: aiohttp.ClientSession,
     stoat_url: str,
     token: str,
     server_id: str,
-    title: str,
+    categories: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    """Create a category on a server.
+    """Set the full categories array on a server via PATCH.
+
+    Each category dict must have ``id`` (str, 1-32 chars), ``title`` (str, max 32),
+    and ``channels`` (list of channel ID strings).
 
     Args:
         session: An active aiohttp ClientSession.
         stoat_url: Stoat API base URL.
         token: Stoat session token.
         server_id: Target server ID.
-        title: Display title for the new category.
+        categories: Full list of category dicts to set on the server.
 
     Returns:
-        Category object dict from the API (includes ``id``).
+        Updated server object dict.
     """
-    url = f"{stoat_url.rstrip('/')}/servers/{server_id}/categories"
-    return await _api_request(session, "POST", url, token, {"title": title})
-
-
-async def api_edit_category(
-    session: aiohttp.ClientSession,
-    stoat_url: str,
-    token: str,
-    server_id: str,
-    category_id: str,
-    channels: list[str],
-) -> dict[str, Any]:
-    """Assign channels to a category (two-step category creation pattern).
-
-    Args:
-        session: An active aiohttp ClientSession.
-        stoat_url: Stoat API base URL.
-        token: Stoat session token.
-        server_id: Target server ID.
-        category_id: Target category ID.
-        channels: Full list of channel IDs that belong to this category.
-
-    Returns:
-        Updated category object dict.
-    """
-    url = f"{stoat_url.rstrip('/')}/servers/{server_id}/categories/{category_id}"
-    return await _api_request(session, "PATCH", url, token, {"channels": channels})
+    url = f"{stoat_url.rstrip('/')}/servers/{server_id}"
+    return await _api_request(session, "PATCH", url, token, {"categories": categories})
 
 
 async def api_create_channel(
@@ -295,25 +351,35 @@ async def api_create_emoji(
     session: aiohttp.ClientSession,
     stoat_url: str,
     token: str,
-    server_id: str,
+    emoji_id: str,
     name: str,
-    parent: str,
+    server_id: str,
 ) -> dict[str, Any]:
-    """Create a custom emoji on a server.
+    """Create a custom emoji on a Stoat server.
+
+    Uses ``PUT /custom/emoji/{emoji_id}`` where ``emoji_id`` is the Autumn
+    file ID from a prior upload.  The Autumn ID becomes the emoji's permanent
+    Stoat ID.
 
     Args:
         session: An active aiohttp ClientSession.
         stoat_url: Stoat API base URL.
         token: Stoat session token.
-        server_id: Target server ID.
-        name: Display name for the emoji (without colons).
-        parent: Autumn file ID of the uploaded emoji image.
+        emoji_id: Autumn file ID (becomes the emoji's permanent ID).
+        name: Emoji display name (must match ``^[a-z0-9_]+$``, max 32 chars).
+        server_id: Server that owns this emoji.
 
     Returns:
-        Emoji object dict from the API (includes ``_id``).
+        Emoji object dict from the API.
     """
-    url = f"{stoat_url.rstrip('/')}/servers/{server_id}/emojis"
-    return await _api_request(session, "POST", url, token, {"name": name, "parent": parent})
+    url = f"{stoat_url.rstrip('/')}/custom/emoji/{emoji_id}"
+    return await _api_request(
+        session,
+        "PUT",
+        url,
+        token,
+        {"name": name, "parent": {"type": "Server", "id": server_id}},
+    )
 
 
 async def api_send_message(
@@ -327,7 +393,7 @@ async def api_send_message(
     embeds: list[dict[str, Any]] | None = None,
     masquerade: dict[str, str | None] | None = None,
     replies: list[dict[str, Any]] | None = None,
-    nonce: str | None = None,
+    idempotency_key: str | None = None,
     silent: bool = True,
 ) -> dict[str, Any]:
     """Send a message to a channel.
@@ -342,7 +408,8 @@ async def api_send_message(
         embeds: List of embed dicts. Optional.
         masquerade: Masquerade dict with name/avatar/colour fields (values may be None). Optional.
         replies: List of reply reference dicts. Optional.
-        nonce: Deduplication nonce (use ``f"ferry-{discord_msg_id}"``). Optional.
+        idempotency_key: Deduplication key sent as ``Idempotency-Key`` HTTP header
+            (use ``f"ferry-{discord_msg_id}"``). Optional.
         silent: Suppress notifications. Defaults to True to avoid spam during migration.
 
     Returns:
@@ -360,11 +427,10 @@ async def api_send_message(
         data["masquerade"] = masquerade
     if replies is not None:
         data["replies"] = replies
-    if nonce is not None:
-        data["nonce"] = nonce
     if silent:
         data["silent"] = True
-    return await _api_request(session, "POST", url, token, data)
+    extra = {"Idempotency-Key": idempotency_key} if idempotency_key else None
+    return await _api_request(session, "POST", url, token, data, extra_headers=extra)
 
 
 async def api_add_reaction(

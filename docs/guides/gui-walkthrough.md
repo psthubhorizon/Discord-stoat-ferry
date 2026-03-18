@@ -25,7 +25,7 @@ In this mode, Ferry downloads and runs DiscordChatExporter for you automatically
 
 **Stoat API URL** — select Official (`https://api.stoat.chat`) or enter your self-hosted domain.
 
-**Stoat user token** — paste your Stoat user token (masked input).
+**Stoat user token** — paste the token you copied from your browser's developer tools (masked input). See [how to find it](../getting-started/setup-stoat.md#2-get-your-stoat-user-token). No bot or app creation needed — this is a key your browser already has.
 
 ### Offline Mode ("I already have exports")
 
@@ -49,6 +49,11 @@ Click **Advanced Options** to expand the following settings. Defaults are safe f
 | Skip threads | Off | Do not migrate threads or forum posts. Useful when approaching the 200-channel limit. |
 | Dry run | Off | Run all migration phases without actually contacting the Stoat server. Useful for validating your export before committing to a full migration. |
 | Existing server ID | *(empty)* | Paste a Stoat server ID to migrate into a server you have already created, rather than creating a new one. |
+| Checkpoint interval | 50 | How often migration state is saved (every N messages). Lower = safer but more I/O. Minimum 1. |
+| Skip avatars | Off | Skip the avatar pre-flight phase. Avatars will be uploaded on-demand during messages instead. |
+| Reaction mode | Text | How to handle reactions: **Text** (default) appends `[Reactions: emoji count]` to message content — zero extra API calls. **Native** applies reactions via API (slower). **Skip** ignores reactions entirely. |
+| Min thread messages | 0 | Exclude threads with fewer than this many messages. 0 includes all threads. Useful for servers with hundreds of low-activity threads. |
+| Validate after | Off | Run a post-migration validation that compares Stoat server against the migration state. Reports discrepancies. |
 
 !!! tip "Running into 'Too Many Requests' errors?"
     That error (code 429) means Stoat is asking Ferry to slow down. Increase the rate limit slider to 2.0 or 3.0 seconds. This slows the migration but eliminates the errors.

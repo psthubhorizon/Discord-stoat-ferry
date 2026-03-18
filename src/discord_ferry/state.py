@@ -1,11 +1,23 @@
 """Migration state management, ID mapping, and persistence."""
 
+import dataclasses
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from discord_ferry.errors import StateError
+
+
+@dataclass
+class FailedMessage:
+    """A message that failed to send during migration."""
+
+    discord_msg_id: str
+    stoat_channel_id: str
+    error: str
+    retry_count: int = 0
+    content_preview: str = ""
 
 
 @dataclass
@@ -62,6 +74,16 @@ class MigrationState:
 
     # Export phase tracking (for smart resume)
     export_completed: bool = False
+
+    # Orphan upload tracking: detect Autumn files uploaded but never referenced in a message
+    autumn_uploads: dict[str, str] = field(default_factory=dict)  # autumn_id -> source_id
+    referenced_autumn_ids: set[str] = field(default_factory=set)  # confirmed used
+
+    # Dead-letter queue: messages that failed to send (typed, retryable)
+    failed_messages: list[FailedMessage] = field(default_factory=list)
+
+    # Post-migration validation results
+    validation_results: dict[str, object] = field(default_factory=dict)
 
 
 def save_state(state: MigrationState, output_dir: Path) -> None:
@@ -125,6 +147,10 @@ def _state_to_dict(state: MigrationState) -> dict[str, Any]:
         "completed_at": state.completed_at,
         "is_dry_run": state.is_dry_run,
         "export_completed": state.export_completed,
+        "autumn_uploads": state.autumn_uploads,
+        "referenced_autumn_ids": list(state.referenced_autumn_ids),
+        "failed_messages": [dataclasses.asdict(fm) for fm in state.failed_messages],
+        "validation_results": state.validation_results,
     }
 
 
@@ -156,6 +182,10 @@ def _dict_to_state(data: dict[str, Any]) -> MigrationState:
             completed_at=data.get("completed_at", ""),
             is_dry_run=data.get("is_dry_run", False),
             export_completed=data.get("export_completed", False),
+            autumn_uploads=data.get("autumn_uploads", {}),
+            referenced_autumn_ids=set(data.get("referenced_autumn_ids", [])),
+            failed_messages=[FailedMessage(**d) for d in data.get("failed_messages", [])],
+            validation_results=data.get("validation_results", {}),
         )
     except (TypeError, ValueError) as e:
         raise StateError(f"Invalid state data: {e}") from e

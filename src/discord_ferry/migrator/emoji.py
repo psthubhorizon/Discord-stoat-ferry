@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 
 from discord_ferry.core.events import MigrationEvent
 from discord_ferry.migrator.api import api_create_emoji, get_session
+from discord_ferry.migrator.sanitize import sanitize_emoji_name
 from discord_ferry.parser.dce_parser import stream_messages
 from discord_ferry.uploader.autumn import upload_with_cache
 
@@ -218,15 +219,16 @@ async def run_emoji(
                     config.upload_delay,
                 )
 
-                result = await api_create_emoji(
+                sanitized_name = sanitize_emoji_name(name)
+                await api_create_emoji(
                     session,
                     config.stoat_url,
                     config.token,
-                    state.stoat_server_id,
-                    name,
                     autumn_id,
+                    sanitized_name,
+                    state.stoat_server_id,
                 )
-                state.emoji_map[discord_id] = result["_id"]
+                state.emoji_map[discord_id] = autumn_id
 
                 if is_animated:
                     state.warnings.append(

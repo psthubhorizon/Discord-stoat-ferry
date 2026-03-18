@@ -41,39 +41,54 @@ The API URL is the web address that Ferry sends data to. It is different from th
 
 ## 2. Get your Stoat user token
 
-Your user token is a long string of characters that acts like a temporary password for the Stoat API. Ferry needs it to create channels, send messages, and build your server on your behalf.
+Your user token is a secret key that Stoat stores in your browser when you log in. It works like a temporary password — Ferry uses it to create channels, send messages, and build your server on your behalf.
+
+**You do NOT need to create a bot or register an application.** You are copying a value that already exists in your browser right now (assuming you are logged in to Stoat).
 
 !!! warning "Keep your token private"
-    Anyone with your token can take actions as your account. Do not paste it into chat messages, screenshots, or text files you share with others. Treat it like a password.
+    Anyone with your token can act as your Stoat account. Do not paste it into chat messages, screenshots, or text files you share with others. Treat it like a password.
 
-!!! warning "Use a regular user account, not a bot account"
-    Ferry must create the Stoat server on your behalf. The Stoat API does not allow bot tokens to create servers — they receive a "403 Forbidden" error. You must use the token from a regular user account (the kind you log into in your browser).
+!!! warning "Use your regular Stoat login — not a bot"
+    Ferry needs a normal user account (the one you use to chat). Bot tokens cannot create servers and will fail with a "403 Forbidden" error.
 
-Follow these steps to find your token:
+### How to find your token
 
-1. Open your Stoat instance in a web browser and log into the account you want Ferry to use.
+You will be opening a hidden panel in your browser called "developer tools." This sounds technical, but you just need to click a few things — no coding involved.
 
-2. Press **F12** on your keyboard to open the browser developer tools (a panel that opens alongside the page). On macOS, you can also use **Option + Command + I**.
+1. Open your Stoat instance in a **web browser** (Chrome, Edge, or Firefox) and **make sure you are logged in**. You should see your channels and messages.
+
+2. Press **F12** on your keyboard. A panel will split open along the side or bottom of the browser window — this is the developer tools panel. On macOS, press **Option + Command + I** instead.
 
     <!-- screenshot: browser-devtools-open -->
 
-3. Click the **Application** tab at the top of the developer tools panel (in Chrome or Edge). If you are using Firefox, look for the **Storage** tab instead.
+    !!! tip "Nothing happened when you pressed F12?"
+        Some laptops require you to hold the **Fn** key while pressing F12. Try **Fn + F12**. Alternatively, right-click anywhere on the page, choose **Inspect** from the menu, and the panel will open.
 
-    !!! tip "Can't find the Application tab?"
-        The tabs along the top of the developer tools may be cut off if the panel is narrow. Look for a `>>` or `+` button at the end of the tab row to see hidden tabs.
+3. At the top of the developer tools panel, you will see a row of tabs. Click the one labelled **Application** (in Chrome or Edge). In Firefox, it is called **Storage** instead.
 
-4. In the left sidebar of the Application (or Storage) panel, expand the **Local Storage** section (where the browser saves website data) and click on your Stoat domain. For example: `https://app.stoat.chat` or `https://chat.yourdomain.com`.
+    !!! tip "Can't see the Application tab?"
+        If the panel is narrow, some tabs may be hidden. Look for a **>>** button at the end of the tab row — click it to reveal the hidden tabs.
+
+4. In the left sidebar of the Application panel, look for a section called **Local Storage**. Click the small arrow or triangle next to it to expand it. You will see one or more website addresses listed underneath. Click the one that matches your Stoat instance — for example, `https://app.stoat.chat` or `https://chat.yourdomain.com`.
 
     <!-- screenshot: devtools-local-storage-expanded -->
 
-5. A table of key-value pairs appears on the right. Look for a row where the **Key** column says `session_token` (or a similar name ending in `token`).
+5. A table appears on the right side with two columns: **Key** and **Value**. Scroll through the list and find the row where the Key column says **`session_token`** (or something ending in `token`).
 
-6. Click that row, then click the value in the **Value** column and copy the entire string. This is your token.
+6. Click that row. The full value will appear — either in the row itself or in a panel below the table. **Select the entire value and copy it** (right-click → Copy, or Ctrl+C / Cmd+C). This is your token.
 
     <!-- screenshot: devtools-session-token-selected -->
 
-!!! info "The token will be a long string"
-    User tokens are typically 40–64 characters long and contain a mix of letters and numbers. If what you copied looks very short (under 20 characters), you may have copied the wrong field — go back and look for the longer value.
+!!! info "What does a token look like?"
+    It is a long string of random-looking letters and numbers, typically 40–64 characters. Example shape (not a real token): `A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8S9t0`. If what you copied is very short (under 20 characters), you probably copied the wrong field — go back and look for the longer value.
+
+!!! question "The table is empty — there is nothing to copy?"
+    This means your browser has not saved a login session yet. Try these fixes:
+
+    - **Make sure you are actually logged in.** Go to your Stoat instance (e.g. `https://app.stoat.chat`) in the same browser tab and log in. Then go back to the developer tools panel — the table should now have entries.
+    - **Refresh the page.** Press F5 or click the refresh button, then check the table again.
+    - **Disable browser extensions.** Privacy-focused extensions (uBlock Origin, Privacy Badger, etc.) can block Local Storage. Try disabling them temporarily, or open Stoat in a **private/incognito window** (Ctrl+Shift+N in Chrome, Ctrl+Shift+P in Firefox).
+    - **Try a different browser.** If you normally use Firefox, try Chrome (or vice versa). Log in to Stoat there and repeat the steps above.
 
 ---
 

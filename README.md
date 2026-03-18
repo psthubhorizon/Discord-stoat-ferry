@@ -13,7 +13,7 @@
 |----------|----------|------|
 | **Windows** | [Ferry.exe](https://github.com/psthubhorizon/Discord-stoat-ferry/releases/latest/download/Ferry-windows-x86_64.exe) | ~25 MB |
 | **macOS** | [Ferry.zip](https://github.com/psthubhorizon/Discord-stoat-ferry/releases/latest/download/Ferry-macos-arm64.zip) | ~25 MB |
-| **Linux / pip** | `pipx install discord-ferry` | — |
+| **Linux / pip** | `pipx install discord-ferry` | ~2 MB |
 
 ---
 
@@ -33,7 +33,7 @@ Launch Ferry. You'll need four things:
 
 - **Discord user token** + **server ID** — a token is a secret key that lets Ferry access your account. Ferry shows you how to find both.
 - **Stoat API URL** — the web address Ferry uses to talk to Stoat. Use `https://api.stoat.chat` for the official service, or your own domain if you run your own Stoat instance.
-- **Stoat user token** — your Stoat secret key. The [step-by-step guide](docs/getting-started/setup-stoat.md) shows exactly where to find it.
+- **Stoat user token** — a secret key your browser saves when you log in to Stoat. No bot or app creation needed — you just copy it from your browser. The [step-by-step guide](docs/getting-started/setup-stoat.md) shows exactly where to find it.
 
 ### Step 2: Ferry exports your server automatically
 
@@ -83,6 +83,15 @@ Ferry can **pause and resume** — close it anytime, pick up where you left off.
 | Original timestamps | Shown in message text, not metadata |
 | Pre-creation review | Summary and confirmation before anything is created on Stoat |
 | Server blueprints | Export migration structure as reusable JSON templates |
+| Avatar pre-flight | Uploads author avatars before message migration begins |
+| CDN URL validation | Detects expired Discord attachment URLs before migration |
+| Dead-letter queue | Failed messages tracked and retryable without re-running |
+| Configurable reactions | Text summary (default), native API, or skip — per migration |
+| Discord link rewriting | Jump links and invite URLs annotated for Stoat context |
+| Circuit breaker | Exponential backoff prevents indefinite blocking on API failures |
+| Post-migration validation | Verifies Stoat server matches source after migration |
+| Markdown report | Human-readable `migration_report.md` generated after migration |
+| Server banner migration | Supported |
 
 ---
 
@@ -96,12 +105,14 @@ Ferry can **pause and resume** — close it anytime, pick up where you left off.
 - [Migrating large servers (100k+ messages)](docs/guides/large-servers.md)
 - [Self-hosted tips](docs/guides/self-hosted-tips.md)
 - [Troubleshooting](docs/guides/troubleshooting.md)
+- [Pre-Flight Checklist](docs/guides/pre-flight-checklist.md)
+- [Known Limitations](docs/guides/known-limitations.md)
 
 ---
 
 ## Contributing
 
-We welcome contributions! See [CONTRIBUTING.md](CONTRIBUTING.md).
+We welcome contributions! See [CONTRIBUTING.md](.github/CONTRIBUTING.md).
 
 ---
 

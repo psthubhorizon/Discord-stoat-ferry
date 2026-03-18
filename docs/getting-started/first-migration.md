@@ -10,15 +10,15 @@ Before you start, confirm you have these ready:
 
 **For 1-Click Migration (recommended):**
 
-- [ ] Your Discord user token — a secret key that gives Ferry temporary access to your account ([how to find it](https://github.com/Tyrrrz/DiscordChatExporter/wiki/Obtaining-Token))
-- [ ] Your Discord server ID (right-click the server name > Copy Server ID)
-- [ ] Your Stoat API URL (`https://api.stoat.chat` for the official host)
-- [ ] Your Stoat user token ([how to find it](setup-stoat.md#2-get-your-stoat-user-token))
+- [ ] Your **Discord user token** — a secret key from your browser that gives Ferry temporary access to your Discord account ([how to find it](https://github.com/Tyrrrz/DiscordChatExporter/wiki/Obtaining-Token))
+- [ ] Your **Discord server ID** — right-click the server name in Discord and choose "Copy Server ID" (you may need to enable Developer Mode in Discord settings first)
+- [ ] Your **Stoat API URL** — `https://api.stoat.chat` for the official service, or your self-hosted domain
+- [ ] Your **Stoat user token** — a secret key your browser saves when you log in to Stoat. No bot or app creation needed. ([how to find it](setup-stoat.md#2-get-your-stoat-user-token))
 
 **For Offline Migration (advanced):**
 
-- [ ] Your Discord export folder (produced by DiscordChatExporter — the free tool described in the [export guide](export-discord.md))
-- [ ] Your Stoat API URL and user token (same as above)
+- [ ] Your **Discord export folder** — produced by DiscordChatExporter, a free tool described in the [export guide](export-discord.md)
+- [ ] Your **Stoat API URL** and **Stoat user token** — same as above
 
 !!! warning "Discord token security"
     Your Discord token gives full access to your account. Never share it. Ferry does not store it to disk — it is held in memory only during the export.
@@ -70,7 +70,7 @@ Before you start, confirm you have these ready:
     2. **Discord server ID** — paste the server ID.
     3. **Acknowledge the ToS disclaimer** — check the checkbox.
     4. **Stoat API URL** — select Official or Self-hosted.
-    5. **Stoat user token** — paste your Stoat user token.
+    5. **Stoat user token** — paste the token you copied from your browser (see [how to find it](setup-stoat.md#2-get-your-stoat-user-token)).
 
     **Offline mode ("I already have exports"):**
 

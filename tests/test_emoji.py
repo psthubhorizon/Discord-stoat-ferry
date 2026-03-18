@@ -161,8 +161,8 @@ async def test_run_emoji_deduplication(tmp_path: Path) -> None:
     ):
         await run_emoji(config, state, exports, events.append)
 
-    # Only one emoji should be created.
-    assert state.emoji_map == {"999": "stoat_emoji_1"}
+    # Only one emoji should be created — value is the Autumn file ID.
+    assert state.emoji_map == {"999": "autumn_file_1"}
 
 
 async def test_run_emoji_limit_warning(tmp_path: Path) -> None:
@@ -401,7 +401,7 @@ async def test_run_emoji_animated_warning(tmp_path: Path) -> None:
         await run_emoji(config, state, exports, events.append)
 
     # Emoji should still be created.
-    assert state.emoji_map["555"] == "stoat_555"
+    assert state.emoji_map["555"] == "autumn_id"
 
     # Warning about animation loss should be emitted.
     warning_events = [e for e in events if e.status == "warning"]
@@ -439,6 +439,6 @@ async def test_run_emoji_static_no_animation_warning(tmp_path: Path) -> None:
     ):
         await run_emoji(config, state, exports, events.append)
 
-    assert state.emoji_map["666"] == "stoat_666"
+    assert state.emoji_map["666"] == "autumn_id"
     # No animation warnings.
     assert not any("animated" in w["message"].lower() for w in state.warnings)

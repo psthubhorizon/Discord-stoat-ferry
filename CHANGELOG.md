@@ -4,19 +4,109 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.7.1] — 2026-03-18
+
+### Added
+
+- **Known limitations guide**: Centralized `docs/guides/known-limitations.md` listing every structural impossibility with what-Discord-has / what-Stoat-gets / workaround columns.
+- **Pre-flight checklist**: `docs/guides/pre-flight-checklist.md` — 10-step preparation guide preventing common migration failures.
+- **Forum post index channel**: Auto-generated `forum-index` channel per forum-derived category with pinned message listing all posts and message counts.
+
+## [1.7.0] — 2026-03-18
+
+### Added
+
+- **Exponential backoff + circuit breaker**: API retries use `min(2^attempt, 60)` + jitter instead of fixed 2s. Circuit breaker opens after 5 consecutive non-429 failures (30s pause). asyncio.Semaphore bounds concurrent requests.
+- **Discord link rewriting**: Jump links (`discord.com/channels/...`) rewritten to Stoat channel references. Invite links (`discord.gg/...`) annotated as expired. Covers all URL variants (canary, ptb, discordapp.com).
+- **Edited message indicator**: Messages with `timestamp_edited` now show `*(edited)*` after the timestamp prefix.
+- **Attachment overflow handling**: Messages with >5 attachments get text fallback listing skipped filenames instead of silent truncation.
+- **Embed URL validation**: Expired Discord CDN embed media URLs (thumbnail, image) are detected and stripped, preserving text content.
+- **Markdown migration report**: `migration_report.md` generated alongside JSON with human-readable summary table, errors, and warnings.
+- **Server banner migration**: Banner hash extracted from Discord API, downloaded from CDN, uploaded to Autumn, applied via `api_edit_server`.
+
+## [1.6.0] — 2026-03-18
+
+### Added
+
+- **Dead-letter queue**: Failed messages tracked as typed `FailedMessage` objects with Discord ID, error, and content preview. New `run_retry_failed()` re-processes failures using single-scan strategy.
+- **Configurable reaction strategy**: New `reaction_mode` config — `"text"` (default) appends `[Reactions: emoji count]` to content (zero extra API calls), `"native"` keeps Phase 9 behavior, `"skip"` ignores reactions entirely.
+- **Per-member permission override warnings**: User overrides (type=1) now counted per channel, surfaced in pre-migration review and report with workaround suggestion ("create single-user roles").
+- **Inline embed field layout**: Embed fields with `inline=True` grouped into rows with `|` separators (max 3 per row). Non-inline fields render on their own lines.
+- **Orphaned Autumn asset tracking**: Every upload tracked; after successful send, IDs marked as referenced. Post-migration report shows unreferenced file count.
+- **Thread filtering by message count**: New `min_thread_messages` config (default 0) excludes threads below the threshold. Filtered threads logged as warnings.
+- **Post-migration validation**: Optional `validate_after` phase compares Stoat server channel/role counts against state maps via `api_fetch_server()`. Reports discrepancies.
+
+## [1.5.0] — 2026-03-18
+
+### Added
+
+- **Avatar pre-flight phase**: New migration phase uploads all unique author avatars to Autumn before message migration, preventing broken masquerade avatars when Discord CDN URLs expire.
+- **CDN URL expiration detection**: Validates Discord CDN signed URLs during export validation and warns when attachment URLs have expired, with recommendation to re-export with `--media`.
+- **Configurable checkpoint interval**: New `checkpoint_interval` config field (default: 50) controls how often migration state is saved, with a 5-second time throttle to prevent I/O thrashing.
+- **Timestamp preservation guide**: New `docs/guides/timestamps.md` documenting why message timestamps change and the self-hosted MongoDB workaround.
+- Regression tests for audit-verified features (emoji phase ordering, ADMINISTRATOR permission mapping, deny-bit pipeline).
+
+### Fixed
+
+- **Security**: ADMINISTRATOR bit in deny context no longer incorrectly expands to ALL permissions. Other deny bits alongside ADMINISTRATOR are now correctly translated.
+- **Security**: Missing Discord token warning upgraded from `status="progress"` to `status="warning"` with explicit mention that private channels may become publicly visible.
+- **Resilience**: HTTP 413 from Autumn now produces a specific "File too large" error message with file size and limit, instead of a generic upload failure.
+- **Resilience**: Oversized attachments are pre-checked against size limits before upload attempt, with text placeholder injected into message content.
+- **Resilience**: Expired CDN URLs produce `[Attachment expired: filename]` placeholder in message content instead of silent failure.
+
 ## [Unreleased]
 
 ### Changed
 
 - Plain English audit across all user-facing docs: define jargon on first use (CLI, JSON, API, CDN, DCE, token, terminal, developer tools), add parenthetical explanations for technical terms, use direct language throughout.
 - Comprehensive architecture doc rewrite (`docs/reference/architecture.md`): expanded from ~200 lines to ~1200 lines covering every module, data model, migration phase, API pattern, async design, and design decision.
+- Claude Code config cleanup: remove CogniLayer duplication from project CLAUDE.md (~130 lines), remove PostToolUse hook, remove redundant bash/WebFetch permissions, fix tool name typo.
+- Overhaul Claude Code workflow pipeline: enforced 8-step chain (`/brief → /spec → /brainstorm → /critique → [/test-scenarios] → writing-plans → build → /ship`) with `<WORKFLOW-GATE>` blocks and Phase 0 prerequisite checks in every skill.
+- Clean up public repo: remove internal design docs, briefs, and plans from git tracking; move community files to `.github/`; gitignore local dev config (`.mcp.json`, agent memory).
+
+### Added
+
+- New `/spec` skill: transforms briefs into structured, prioritised requirements with acceptance criteria (between `/brief` and `/brainstorm`).
+- New `/brainstorm` skill: project-local design exploration replacing `superpowers:brainstorming`, with correct handoff to `/critique`.
+- New `/test-scenarios` skill: generates test scenarios from spec acceptance criteria (optional, recommended for Large tasks).
+- Key-files and security rules (`.claude/rules/key-files.md`, `.claude/rules/security.md`).
+- CogniLayer MCP wiring (`.mcp.json`, tool permissions) for two-layer memory model.
+- Change manifest pattern for `/ship` audit step (`.claude/change-manifest.md` template in CLAUDE.md).
 
 ### Fixed
 
 - Fix DCE download URL: remove redundant "v" prefix from version in GitHub release URL.
-- Fix "Stoat bot token" → "Stoat user token" in CLI reference, GUI walkthrough, and first migration guide.
+- Fix misleading "bot token" terminology across entire project: GUI labels, CLI help, all user-facing docs, code comments, and reference docs now consistently say "user token" with plain-English explanations for non-technical users. Expanded token setup guide with step-by-step browser instructions and Local Storage troubleshooting.
 - Exclude internal design docs (`docs/plans/`, brief) from public docs site via `exclude_docs`.
 - Add dark/light mode toggle and GitHub repo link to docs site theme.
+
+## [1.4.0] — 2026-03-09
+
+### Fixed
+
+- **Category creation endpoint**: Replaced non-existent `POST /servers/{id}/categories` and `PATCH /servers/{id}/categories/{id}` with correct `PATCH /servers/{id}` using the server's `categories` array property. Categories are now built locally with client-generated IDs and sent in a single PATCH call.
+- **Emoji creation endpoint**: Replaced non-existent `POST /servers/{id}/emojis` with correct `PUT /custom/emoji/{autumn_id}` using `parent` object (`{"type": "Server", "id": server_id}`). The Autumn file ID is now the emoji's permanent Stoat ID.
+- **Channel name truncation**: Reduced from 64 to 32 characters to match Stoat API `maxLength` constraint.
+- **Message nonce deprecated**: Replaced `nonce` body field with `Idempotency-Key` HTTP header for message deduplication. Resume logic unaffected (keyed by Discord message ID).
+
+### Added
+
+- **String sanitization module** (`migrator/sanitize.py`): `truncate_name()` (generic 32-char truncation) and `sanitize_emoji_name()` (lowercase, `[a-z0-9_]` only, 32-char max, fallback to `"emoji"`).
+- **Role name truncation**: Role names truncated to 32 characters before API call.
+- **Category title truncation**: Category titles truncated to 32 characters.
+- **Masquerade name truncation**: Display names truncated to 32 characters.
+- **Emoji name sanitization**: Custom emoji names sanitized to `^[a-z0-9_]+$` pattern and 32-character limit.
+- **`extra_headers` support**: `_api_request()` now accepts optional extra HTTP headers (used for `Idempotency-Key`).
+- **14 new tests**: sanitize helpers (12), masquerade truncation (1), role name truncation (1) — 440 total passing.
+
+### Changed
+
+- **`api_create_emoji()` signature**: Now takes `emoji_id` (Autumn file ID), `name`, and `server_id` instead of `name` and `parent` (Autumn ID).
+- **`api_send_message()` signature**: `nonce` parameter replaced with `idempotency_key`.
+- **`api_create_category()` and `api_edit_category()` removed**: Replaced by `api_upsert_categories()`.
+- **Category management rewrite**: `run_categories()` generates category IDs client-side and sends a single PATCH. `run_channels()` rebuilds the categories array for channel assignment without a server fetch.
+- **`cli.py` build command**: Updated to use `api_upsert_categories()` with client-generated IDs.
+- **Documentation**: Updated `stoat-api-notes.md` and `.claude/rules/stoat-api.md` with correct endpoints, string limits, and deprecation notes.
 
 ## [1.3.0] — 2026-03-01
 

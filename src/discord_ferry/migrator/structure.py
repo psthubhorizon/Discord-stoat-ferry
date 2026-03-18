@@ -4,27 +4,30 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import uuid
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from discord_ferry.core.events import MigrationEvent
 from discord_ferry.discord.metadata import load_discord_metadata
 from discord_ferry.errors import MigrationError
 from discord_ferry.migrator.api import (
-    api_create_category,
     api_create_channel,
     api_create_role,
     api_create_server,
-    api_edit_category,
     api_edit_role,
     api_edit_server,
     api_fetch_server,
+    api_pin_message,
+    api_send_message,
     api_set_channel_default_permissions,
     api_set_channel_role_permissions,
     api_set_role_permissions,
     api_set_server_default_permissions,
+    api_upsert_categories,
     get_session,
 )
+from discord_ferry.migrator.sanitize import truncate_name
 from discord_ferry.parser.dce_parser import stream_messages
 from discord_ferry.uploader.autumn import upload_with_cache
 
@@ -36,7 +39,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Minimum permissions for the ferry bot to operate:
+# Minimum permissions for the Ferry account to operate:
 # ManageRole(3), ManageCustomisation(4), ViewChannel(20), ReadMessageHistory(21),
 # SendMessage(22), ManageMessages(23), SendEmbeds(26), UploadFiles(27), Masquerade(28), React(29)
 FERRY_MIN_PERMISSIONS = (
@@ -54,16 +57,16 @@ FERRY_MIN_PERMISSIONS = (
 
 
 def make_unique_channel_name(name: str, existing_names: set[str]) -> str:
-    """Return a name unique within ``existing_names``, truncating to 64 chars.
+    """Return a name unique within ``existing_names``, truncating to 32 chars.
 
     Args:
         name: Desired channel name.
         existing_names: Set of already-used names. Updated in place with the returned name.
 
     Returns:
-        A name that is not already in ``existing_names`` (at most 64 chars).
+        A name that is not already in ``existing_names`` (at most 32 chars).
     """
-    base = name[:64]
+    base = name[:32]
     if base not in existing_names:
         existing_names.add(base)
         return base
@@ -71,11 +74,16 @@ def make_unique_channel_name(name: str, existing_names: set[str]) -> str:
     counter = 1
     while True:
         suffix = f"-{counter}"
-        candidate = f"{name[: 64 - len(suffix)]}{suffix}"
+        candidate = f"{name[: 32 - len(suffix)]}{suffix}"
         if candidate not in existing_names:
             existing_names.add(candidate)
             return candidate
         counter += 1
+
+
+def _generate_category_id() -> str:
+    """Generate a unique category ID (1-32 char string)."""
+    return uuid.uuid4().hex[:26]
 
 
 async def run_server(
@@ -184,6 +192,61 @@ async def run_server(
                             )
                         )
 
+        # Upload and apply server banner if available from Discord metadata.
+        discord_meta = load_discord_metadata(config.output_dir)
+        if discord_meta and discord_meta.banner_hash:
+            guild_id = discord_meta.guild_id
+            banner_url = (
+                f"https://cdn.discordapp.com/banners/{guild_id}/"
+                f"{discord_meta.banner_hash}.png?size=1024"
+            )
+            try:
+                banner_dir = config.output_dir / "banners"
+                banner_dir.mkdir(parents=True, exist_ok=True)
+                banner_path = banner_dir / f"{guild_id}.png"
+                async with session.get(banner_url) as resp:
+                    if resp.status == 200:
+                        banner_path.write_bytes(await resp.read())
+                        banner_id = await upload_with_cache(
+                            session,
+                            state.autumn_url,
+                            "banners",
+                            banner_path,
+                            config.token,
+                            state.upload_cache,
+                            config.upload_delay,
+                        )
+                        await api_edit_server(
+                            session,
+                            config.stoat_url,
+                            config.token,
+                            state.stoat_server_id,
+                            banner=banner_id,
+                        )
+                        on_event(
+                            MigrationEvent(
+                                phase="server",
+                                status="progress",
+                                message="Applied server banner",
+                            )
+                        )
+                    else:
+                        state.warnings.append(
+                            {
+                                "phase": "server",
+                                "type": "banner_download_failed",
+                                "message": f"Banner download returned status {resp.status}",
+                            }
+                        )
+            except Exception as exc:  # noqa: BLE001
+                state.warnings.append(
+                    {
+                        "phase": "server",
+                        "type": "banner_upload_failed",
+                        "message": f"Banner migration failed: {exc}",
+                    }
+                )
+
         # Bootstrap minimum permissions on the server's default role.
         try:
             await api_edit_server(
@@ -277,7 +340,11 @@ async def run_roles(
     async with get_session(config) as session:
         for idx, role in enumerate(roles_to_create, start=1):
             result = await api_create_role(
-                session, config.stoat_url, config.token, state.stoat_server_id, role.name
+                session,
+                config.stoat_url,
+                config.token,
+                state.stoat_server_id,
+                truncate_name(role.name),
             )
             stoat_role_id: str = result["id"]
             state.role_map[role.id] = stoat_role_id
@@ -440,11 +507,17 @@ async def run_categories(
         return
 
     async with get_session(config) as session:
+        stoat_categories: list[dict[str, Any]] = []
         for idx, (discord_cat_id, cat_name) in enumerate(unique_categories, start=1):
-            result = await api_create_category(
-                session, config.stoat_url, config.token, state.stoat_server_id, cat_name
+            stoat_cat_id = _generate_category_id()
+            state.category_map[discord_cat_id] = stoat_cat_id
+            stoat_categories.append(
+                {
+                    "id": stoat_cat_id,
+                    "title": truncate_name(cat_name),
+                    "channels": [],
+                }
             )
-            state.category_map[discord_cat_id] = result["id"]
 
             on_event(
                 MigrationEvent(
@@ -454,6 +527,15 @@ async def run_categories(
                     current=idx,
                     total=len(unique_categories),
                 )
+            )
+
+        if stoat_categories:
+            await api_upsert_categories(
+                session,
+                config.stoat_url,
+                config.token,
+                state.stoat_server_id,
+                stoat_categories,
             )
 
     on_event(
@@ -538,19 +620,23 @@ async def run_channels(
             (channel, stoat_type, unique_name, effective_cat_id, export.is_thread)
         )
 
-    if len(channels_to_create) > config.max_channels:
-        overflow = len(channels_to_create) - config.max_channels
+    # Reserve channel slots for forum index channels (one per forum category).
+    index_channel_slots = len(forum_categories) if forum_categories else 0
+    effective_max = config.max_channels - index_channel_slots
+
+    if len(channels_to_create) > effective_max:
+        overflow = len(channels_to_create) - effective_max
         # Sort so threads come last, then truncate — preserves main channels.
         channels_to_create.sort(key=lambda t: t[4])  # False (main) before True (thread)
-        dropped = channels_to_create[config.max_channels :]
-        channels_to_create = channels_to_create[: config.max_channels]
+        dropped = channels_to_create[effective_max:]
+        channels_to_create = channels_to_create[:effective_max]
         dropped_names = [entry[2] for entry in dropped]
         on_event(
             MigrationEvent(
                 phase="channels",
                 status="warning",
                 message=(
-                    f"Total channels ({config.max_channels + overflow}) exceeds Stoat limit "
+                    f"Total channels ({effective_max + overflow}) exceeds Stoat limit "
                     f"of {config.max_channels}. Dropped {overflow} channel(s): "
                     f"{', '.join(dropped_names[:10])}"
                     f"{'...' if len(dropped_names) > 10 else ''}"
@@ -569,26 +655,17 @@ async def run_channels(
         )
 
     # Create forum-derived categories (before dry_run check so they get mapped).
-    # These share the /servers rate bucket (5/10s), so add a safety delay.
     if forum_categories and not config.dry_run:
-        async with get_session(config) as session:
-            for forum_key, forum_name in forum_categories.items():
-                result = await api_create_category(
-                    session,
-                    config.stoat_url,
-                    config.token,
-                    state.stoat_server_id,
-                    forum_name,
+        for forum_key, forum_name in forum_categories.items():
+            stoat_forum_id = _generate_category_id()
+            state.category_map[forum_key] = stoat_forum_id
+            on_event(
+                MigrationEvent(
+                    phase="channels",
+                    status="progress",
+                    message=f"Created forum category '{forum_name}'",
                 )
-                state.category_map[forum_key] = result["id"]
-                on_event(
-                    MigrationEvent(
-                        phase="channels",
-                        status="progress",
-                        message=f"Created forum category '{forum_name}'",
-                    )
-                )
-                await asyncio.sleep(2)  # Safety margin for /servers rate bucket.
+            )
     elif forum_categories and config.dry_run:
         for forum_key in forum_categories:
             state.category_map[forum_key] = f"dry-cat-{forum_key}"
@@ -607,6 +684,10 @@ async def run_channels(
 
     # stoat_category_id -> list of stoat_channel_ids (built during creation).
     category_channels: dict[str, list[str]] = {}
+    # Build an export lookup so we can retrieve message_count for forum posts.
+    export_by_channel: dict[str, DCEExport] = {exp.channel.id: exp for exp in exports}
+    # forum_cat_key -> list of (stoat_channel_id, unique_name, message_count)
+    forum_channel_info: dict[str, list[tuple[str, str, int]]] = {}
 
     async with get_session(config) as session:
         for idx, (channel, stoat_type, unique_name, discord_cat_id, _is_thread) in enumerate(
@@ -665,6 +746,14 @@ async def run_channels(
                     raise
 
             state.channel_map[ch.id] = stoat_channel_id
+
+            # Track forum post info for index channel generation.
+            if discord_cat_id.startswith("forum-"):
+                exp = export_by_channel.get(ch.id)
+                msg_count = exp.message_count if exp else 0
+                forum_channel_info.setdefault(discord_cat_id, []).append(
+                    (stoat_channel_id, unique_name, msg_count)
+                )
 
             # Apply channel permission overrides from Discord metadata.
             if ch_meta and not config.dry_run:
@@ -725,15 +814,122 @@ async def run_channels(
                 )
             )
 
-        # Assign channels to categories (two-step process).
-        for stoat_cat_id, stoat_channel_ids in category_channels.items():
-            await api_edit_category(
+        # Create forum index channels — one per forum category.
+        for forum_key, forum_name in forum_categories.items():
+            forum_cat_stoat_id = state.category_map.get(forum_key)
+            if not forum_cat_stoat_id:
+                continue
+            try:
+                index_name = make_unique_channel_name(f"{forum_name}-index", existing_names)
+                idx_result = await api_create_channel(
+                    session,
+                    config.stoat_url,
+                    config.token,
+                    state.stoat_server_id,
+                    name=index_name,
+                    channel_type="Text",
+                )
+                index_channel_id: str = idx_result["_id"]
+                await asyncio.sleep(config.upload_delay)
+
+                # Build the index message content (max 2000 chars).
+                posts = forum_channel_info.get(forum_key, [])
+                if posts:
+                    lines = [f"**Forum: {forum_name}**\n"]
+                    for post_ch_id, _post_name, post_count in posts:
+                        lines.append(f"- <#{post_ch_id}> — {post_count} messages")
+                    content = "\n".join(lines)
+                    # Truncate to fit Stoat's 2000-char message limit.
+                    if len(content) > 2000:
+                        while lines and len("\n".join(lines)) > 1950:
+                            lines.pop()
+                        remaining = len(posts) - (len(lines) - 1)
+                        lines.append(f"\n*...and {remaining} more posts*")
+                        content = "\n".join(lines)
+                else:
+                    content = "No posts migrated."
+
+                msg_result = await api_send_message(
+                    session,
+                    config.stoat_url,
+                    config.token,
+                    index_channel_id,
+                    content=content,
+                    masquerade={"name": "Discord Ferry"},
+                    idempotency_key=f"ferry-forum-index-{forum_key}",
+                )
+                await asyncio.sleep(config.upload_delay)
+
+                index_msg_id: str = msg_result["_id"]
+                await api_pin_message(
+                    session,
+                    config.stoat_url,
+                    config.token,
+                    index_channel_id,
+                    index_msg_id,
+                )
+                await asyncio.sleep(config.upload_delay)
+
+                # Insert at position 0 so it appears at the top of the category.
+                category_channels.setdefault(forum_cat_stoat_id, []).insert(0, index_channel_id)
+                state.channel_map[f"forum-index-{forum_key}"] = index_channel_id
+
+                on_event(
+                    MigrationEvent(
+                        phase="channels",
+                        status="progress",
+                        message=f"Created forum index for '{forum_name}'",
+                    )
+                )
+            except Exception as exc:  # noqa: BLE001
+                state.warnings.append(
+                    {
+                        "phase": "channels",
+                        "type": "forum_index_failed",
+                        "message": (f"Failed to create forum index for '{forum_name}': {exc}"),
+                    }
+                )
+                on_event(
+                    MigrationEvent(
+                        phase="channels",
+                        status="warning",
+                        message=f"Forum index for '{forum_name}' failed: {exc}",
+                    )
+                )
+
+        # Assign channels to categories via a single PATCH.
+        # This replaces the categories array set by run_categories(). Safe because
+        # cat_titles is built from state.category_map (all categories) and every
+        # category has at least one channel (DCE only exports non-empty categories).
+        if category_channels:
+            cat_titles: dict[str, str] = {}
+            for export in exports:
+                cat_id = export.channel.category_id
+                if cat_id and cat_id in state.category_map:
+                    cat_titles[state.category_map[cat_id]] = truncate_name(export.channel.category)
+            # Add forum category titles.
+            for forum_key, forum_name in forum_categories.items():
+                stoat_forum_cat_id = state.category_map.get(forum_key)
+                if stoat_forum_cat_id:
+                    cat_titles[stoat_forum_cat_id] = truncate_name(forum_name)
+
+            # Build the full categories array.
+            all_categories: list[dict[str, Any]] = []
+            for stoat_cat_id, title in cat_titles.items():
+                all_categories.append(
+                    {
+                        "id": stoat_cat_id,
+                        "title": title,
+                        "channels": category_channels.get(stoat_cat_id, []),
+                    }
+                )
+
+            await api_upsert_categories(
                 session,
                 config.stoat_url,
                 config.token,
                 state.stoat_server_id,
-                stoat_cat_id,
-                stoat_channel_ids,
+                all_categories,
             )
 
     on_event(

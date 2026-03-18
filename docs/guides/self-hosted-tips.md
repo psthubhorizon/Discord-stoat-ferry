@@ -64,6 +64,16 @@ Autumn supports two storage backends:
 
 For migrations with 10+ GB of media, an S3-compatible backend is recommended. Check the Stoat self-hosting documentation for Autumn configuration details.
 
+Server banners are automatically migrated when a Discord token is provided. The banner is downloaded from Discord's CDN and uploaded to Autumn (6MB limit).
+
+---
+
+## Performance Tuning
+
+For powerful self-hosted instances, you can increase `max_concurrent_requests` (default 5) to allow more parallel API calls. The circuit breaker (5 consecutive failures → 30s pause) provides safety regardless of concurrency level.
+
+This option is available in the migration engine but not yet exposed as a CLI flag. See the [Engine Configuration](cli-reference.md#engine-configuration) section in the CLI reference.
+
 ---
 
 ## Ferry GUI Storage Secret
@@ -82,10 +92,10 @@ This is optional. If not set, Ferry will work fine but you will need to re-enter
 
 ## Account Age
 
-Stoat may apply stricter rate limits to accounts that were created less than 72 hours ago. Use an established account (your own personal account) rather than a freshly created bot account when running Ferry.
+Stoat may apply stricter rate limits to accounts that were created less than 72 hours ago. Use an established account — your own personal account that you have been using for a while — rather than a brand-new account created just for the migration.
 
 !!! tip "Server owner is best"
-    Running Ferry with the server owner's token avoids nearly all permission-related issues. The owner automatically has all permissions on all channels.
+    Running Ferry with the server owner's token avoids nearly all permission-related issues. The owner automatically has all permissions on all channels. Remember: Ferry uses your regular user token, not a bot token.
 
 ---
 
@@ -121,3 +131,9 @@ The simplest approach is to use the server owner's token and avoid this list ent
     Voice channel creation may produce text channels instead of voice channels in some Stoat versions. This is a known upstream bug. If voice channel layout matters, check your Stoat version's release notes. You can verify channel types in the Stoat web interface after migration completes.
 
 Voice channels require the Vortex (or LiveKit) service to function. Creating voice channels without this service will create the channel structure but the channels will not be usable for voice.
+
+---
+
+## See Also
+
+- [Timestamp Preservation](timestamps.md) — understanding how message timestamps work after migration, and an advanced workaround for self-hosted instances.

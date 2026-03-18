@@ -143,3 +143,79 @@ def test_load_old_state_without_export_completed(tmp_path: Path) -> None:
     (tmp_path / "state.json").write_text(json.dumps(old_data))
     loaded = load_state(tmp_path)
     assert loaded.export_completed is False
+
+
+def test_autumn_uploads_round_trip(tmp_path: Path) -> None:
+    """autumn_uploads dict survives save/load round-trip."""
+    state = MigrationState(
+        autumn_uploads={"autumn_abc": "discord_att_1", "autumn_def": "discord_att_2"},
+    )
+    save_state(state, tmp_path)
+    loaded = load_state(tmp_path)
+    assert loaded.autumn_uploads == {"autumn_abc": "discord_att_1", "autumn_def": "discord_att_2"}
+
+
+def test_referenced_autumn_ids_round_trip(tmp_path: Path) -> None:
+    """referenced_autumn_ids set survives as list in JSON, reconstructed as set."""
+    import json
+
+    state = MigrationState(
+        referenced_autumn_ids={"autumn_abc", "autumn_def"},
+    )
+    save_state(state, tmp_path)
+
+    # Verify it's stored as a list in JSON
+    raw = json.loads((tmp_path / "state.json").read_text())
+    assert isinstance(raw["referenced_autumn_ids"], list)
+    assert set(raw["referenced_autumn_ids"]) == {"autumn_abc", "autumn_def"}
+
+    # Verify it loads back as a set
+    loaded = load_state(tmp_path)
+    assert isinstance(loaded.referenced_autumn_ids, set)
+    assert loaded.referenced_autumn_ids == {"autumn_abc", "autumn_def"}
+
+
+def test_old_state_without_orphan_fields(tmp_path: Path) -> None:
+    """State JSON from before orphan tracking fields were added loads with empty defaults."""
+    import json
+
+    old_data = {"role_map": {"r1": "sr1"}, "channel_map": {}}
+    (tmp_path / "state.json").write_text(json.dumps(old_data))
+    loaded = load_state(tmp_path)
+    assert loaded.autumn_uploads == {}
+    assert loaded.referenced_autumn_ids == set()
+
+
+# ---------------------------------------------------------------------------
+# FailedMessage dataclass (S1)
+# ---------------------------------------------------------------------------
+
+
+def test_failed_message_round_trip(tmp_path: Path) -> None:
+    """FailedMessage survives save/load round-trip as a typed dataclass."""
+    from discord_ferry.state import FailedMessage
+
+    fm = FailedMessage(
+        discord_msg_id="msg123",
+        stoat_channel_id="ch456",
+        error="API timeout",
+        retry_count=1,
+        content_preview="Hello world...",
+    )
+    state = MigrationState(failed_messages=[fm])
+    save_state(state, tmp_path)
+    loaded = load_state(tmp_path)
+    assert len(loaded.failed_messages) == 1
+    assert isinstance(loaded.failed_messages[0], FailedMessage)
+    assert loaded.failed_messages[0].discord_msg_id == "msg123"
+    assert loaded.failed_messages[0].retry_count == 1
+
+
+def test_old_state_without_failed_messages_loads(tmp_path: Path) -> None:
+    """A state.json from before FailedMessage was added defaults to empty lists/dicts."""
+    import json
+
+    (tmp_path / "state.json").write_text(json.dumps({"role_map": {}}))
+    loaded = load_state(tmp_path)
+    assert loaded.failed_messages == []
+    assert loaded.validation_results == {}

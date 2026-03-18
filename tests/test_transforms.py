@@ -10,6 +10,7 @@ from discord_ferry.parser.transforms import (
     handle_stickers,
     remap_emoji,
     remap_mentions,
+    rewrite_discord_links,
     strip_underline,
 )
 
@@ -227,9 +228,9 @@ def test_flatten_embed_full() -> None:
     assert isinstance(description, str)
     assert "**An Author**" in description
     assert "Main body" in description
-    assert "**Field 1:**" in description
+    assert "**Field 1**" in description
     assert "Value 1" in description
-    assert "**Field 2:**" in description
+    assert "**Field 2**" in description
     assert "Value 2" in description
     assert "_Footer text_" in description
 
@@ -275,8 +276,8 @@ def test_flatten_embed_fields_order() -> None:
     desc = str(result["description"])
     # Author before description before fields before footer
     assert desc.index("**Auth**") < desc.index("Desc")
-    assert desc.index("Desc") < desc.index("**F1:**")
-    assert desc.index("**F1:**") < desc.index("_Foot_")
+    assert desc.index("Desc") < desc.index("**F1**")
+    assert desc.index("**F1**") < desc.index("_Foot_")
 
 
 def test_flatten_embed_with_local_thumbnail(tmp_path: Path) -> None:
@@ -300,6 +301,136 @@ def test_flatten_embed_with_remote_thumbnail() -> None:
     }
     result, media_path = flatten_embed(embed, export_dir=Path("/tmp"))
     assert media_path is None
+
+
+def test_all_inline_fields_in_rows() -> None:
+    """3 inline fields render as a pipe-separated row."""
+    embed: dict[str, object] = {
+        "fields": [
+            {"name": "HP", "value": "100", "inline": True},
+            {"name": "MP", "value": "50", "inline": True},
+            {"name": "ATK", "value": "25", "inline": True},
+        ],
+    }
+    result, _ = flatten_embed(embed)
+    desc = str(result["description"])
+    assert "**HP** | **MP** | **ATK**" in desc
+    assert "100 | 50 | 25" in desc
+
+
+def test_non_inline_field_own_line() -> None:
+    """Non-inline field renders as bold name on its own line, value below."""
+    embed: dict[str, object] = {
+        "fields": [
+            {"name": "Description", "value": "Long text", "inline": False},
+        ],
+    }
+    result, _ = flatten_embed(embed)
+    desc = str(result["description"])
+    assert "**Description**\nLong text" in desc
+    assert "|" not in desc
+
+
+def test_mixed_inline_breaks_rows() -> None:
+    """[inline, inline, non-inline, inline, inline] produces 2 rows + 1 block."""
+    embed: dict[str, object] = {
+        "fields": [
+            {"name": "A", "value": "1", "inline": True},
+            {"name": "B", "value": "2", "inline": True},
+            {"name": "C", "value": "3", "inline": False},
+            {"name": "D", "value": "4", "inline": True},
+            {"name": "E", "value": "5", "inline": True},
+        ],
+    }
+    result, _ = flatten_embed(embed)
+    desc = str(result["description"])
+    # First inline row: A | B
+    assert "**A** | **B**" in desc
+    assert "1 | 2" in desc
+    # Non-inline block
+    assert "**C**\n3" in desc
+    # Second inline row: D | E
+    assert "**D** | **E**" in desc
+    assert "4 | 5" in desc
+
+
+def test_max_three_inline_per_row() -> None:
+    """6 inline fields produce exactly 2 rows of 3."""
+    embed: dict[str, object] = {
+        "fields": [
+            {"name": "A", "value": "1", "inline": True},
+            {"name": "B", "value": "2", "inline": True},
+            {"name": "C", "value": "3", "inline": True},
+            {"name": "D", "value": "4", "inline": True},
+            {"name": "E", "value": "5", "inline": True},
+            {"name": "F", "value": "6", "inline": True},
+        ],
+    }
+    result, _ = flatten_embed(embed)
+    desc = str(result["description"])
+    assert "**A** | **B** | **C**" in desc
+    assert "1 | 2 | 3" in desc
+    assert "**D** | **E** | **F**" in desc
+    assert "4 | 5 | 6" in desc
+
+
+def test_empty_field_skipped() -> None:
+    """Field with empty name and empty value is skipped entirely."""
+    embed: dict[str, object] = {
+        "fields": [
+            {"name": "", "value": ""},
+            {"name": "Visible", "value": "Yes"},
+        ],
+    }
+    result, _ = flatten_embed(embed)
+    desc = str(result["description"])
+    assert "**Visible**" in desc
+    # Only one field section in the description
+    assert desc.count("**") == 2  # opening and closing bold for "Visible"
+
+
+def test_field_name_only_no_value() -> None:
+    """Field with name but no value renders name only (no trailing newline)."""
+    embed: dict[str, object] = {
+        "fields": [
+            {"name": "Score", "value": ""},
+        ],
+    }
+    result, _ = flatten_embed(embed)
+    desc = str(result["description"])
+    assert "**Score**" in desc
+    assert desc.strip() == "**Score**"
+
+
+def test_no_inline_key_defaults_to_block() -> None:
+    """Field without 'inline' key defaults to block (non-inline) rendering."""
+    embed: dict[str, object] = {
+        "fields": [
+            {"name": "Key", "value": "Val"},
+        ],
+    }
+    result, _ = flatten_embed(embed)
+    desc = str(result["description"])
+    assert "**Key**\nVal" in desc
+    assert "|" not in desc
+
+
+def test_unicode_field_names_preserved() -> None:
+    """Unicode characters in field names and values are preserved."""
+    embed: dict[str, object] = {
+        "fields": [
+            {"name": "\u2764\ufe0f Health", "value": "\u2b50 100", "inline": True},
+            {"name": "\u2694\ufe0f Attack", "value": "\u2b50 50", "inline": True},
+        ],
+    }
+    result, _ = flatten_embed(embed)
+    desc = str(result["description"])
+    assert "\u2764\ufe0f Health" in desc
+    assert "\u2694\ufe0f Attack" in desc
+    assert "\u2b50 100" in desc
+    assert "\u2b50 50" in desc
+    # Should be rendered as inline row
+    assert "**\u2764\ufe0f Health** | **\u2694\ufe0f Attack**" in desc
 
 
 # ---------------------------------------------------------------------------
@@ -442,3 +573,143 @@ def test_strip_underline_not_dunder() -> None:
 def test_strip_underline_mixed() -> None:
     content = "__underlined__ and `__code__`"
     assert strip_underline(content) == "**underlined** and `__code__`"
+
+
+# ---------------------------------------------------------------------------
+# flatten_embed — CDN URL expiry validation (S5)
+# ---------------------------------------------------------------------------
+
+
+def test_expired_cdn_embed_media_stripped() -> None:
+    """Expired Discord CDN thumbnail — media_path is None."""
+    embed: dict[str, object] = {
+        "title": "Post",
+        "thumbnail": {"url": "https://cdn.discordapp.com/img.png?ex=60000000"},
+    }
+    result, media_path = flatten_embed(embed)
+    assert media_path is None
+
+
+def test_valid_cdn_embed_url_not_stripped() -> None:
+    """Valid CDN URL — media_path still None (remote, not local) but no warning."""
+    embed: dict[str, object] = {
+        "image": {"url": "https://cdn.discordapp.com/img.png?ex=ffffffff"},
+    }
+    result, media_path = flatten_embed(embed)
+    assert media_path is None  # Still None — it's remote
+
+
+def test_non_discord_embed_url_untouched() -> None:
+    """Non-Discord URL passes through."""
+    embed: dict[str, object] = {
+        "thumbnail": {"url": "https://example.com/img.png"},
+    }
+    result, media_path = flatten_embed(embed)
+    assert media_path is None
+
+
+def test_local_media_path_still_works(tmp_path: Path) -> None:
+    """Local media extraction unchanged."""
+    local = tmp_path / "media" / "img.png"
+    local.parent.mkdir(parents=True, exist_ok=True)
+    local.write_bytes(b"PNG")
+    embed: dict[str, object] = {"image": {"url": "media/img.png"}}
+    result, media_path = flatten_embed(embed, export_dir=tmp_path)
+    assert media_path == local
+
+
+def test_unknown_cdn_format_preserved() -> None:
+    """Discord CDN URL without ex param — not stripped."""
+    embed: dict[str, object] = {
+        "thumbnail": {"url": "https://cdn.discordapp.com/img.png"},
+    }
+    result, media_path = flatten_embed(embed)
+    assert media_path is None  # Remote, but no expiry warning
+
+
+def test_media_discordapp_net_checked() -> None:
+    """media.discordapp.net recognized as Discord CDN."""
+    embed: dict[str, object] = {
+        "image": {"url": "https://media.discordapp.net/img.png?ex=60000000"},
+    }
+    result, media_path = flatten_embed(embed)
+    assert media_path is None  # Expired, stripped
+
+
+# ---------------------------------------------------------------------------
+# rewrite_discord_links
+# ---------------------------------------------------------------------------
+
+
+def test_jump_link_mapped_channel() -> None:
+    """Jump link with a mapped channel ID is rewritten to a Stoat channel mention."""
+    content = "Check https://discord.com/channels/111/456/789 for details"
+    result = rewrite_discord_links(content, channel_map={"456": "stoat_ch"})
+    assert "<#stoat_ch>" in result
+    assert "discord.com" not in result
+
+
+def test_jump_link_unmapped() -> None:
+    """Jump link with an unmapped channel ID gets annotation appended."""
+    content = "See https://discord.com/channels/111/456/789"
+    result = rewrite_discord_links(content, channel_map={})
+    assert "https://discord.com/channels/111/456/789 [original Discord link]" in result
+
+
+def test_jump_link_no_message_id() -> None:
+    """Jump link without a message ID (channel-only) is still matched."""
+    content = "Go to https://discord.com/channels/111/456"
+    result = rewrite_discord_links(content, channel_map={"456": "stoat_ch"})
+    assert "<#stoat_ch>" in result
+
+
+def test_legacy_discordapp_link() -> None:
+    """Legacy discordapp.com jump links are matched."""
+    content = "Old link https://discordapp.com/channels/111/456/789"
+    result = rewrite_discord_links(content, channel_map={"456": "stoat_ch"})
+    assert "<#stoat_ch>" in result
+
+
+def test_canary_ptb_links() -> None:
+    """Canary and PTB subdomain links are matched."""
+    content_canary = "https://canary.discord.com/channels/111/456/789"
+    result_canary = rewrite_discord_links(content_canary, channel_map={"456": "stoat_ch"})
+    assert "<#stoat_ch>" in result_canary
+
+    content_ptb = "https://ptb.discord.com/channels/111/456/789"
+    result_ptb = rewrite_discord_links(content_ptb, channel_map={"456": "stoat_ch"})
+    assert "<#stoat_ch>" in result_ptb
+
+
+def test_invite_annotation() -> None:
+    """discord.gg invite links get annotated as no longer valid."""
+    content = "Join us: https://discord.gg/abc123"
+    result = rewrite_discord_links(content, channel_map={})
+    assert "https://discord.gg/abc123 [Discord invite — no longer valid]" in result
+
+
+def test_invite_via_discord_com() -> None:
+    """discord.com/invite links get annotated as no longer valid."""
+    content = "Join: https://discord.com/invite/xyz"
+    result = rewrite_discord_links(content, channel_map={})
+    assert "https://discord.com/invite/xyz [Discord invite — no longer valid]" in result
+
+
+def test_link_in_code_block_untouched() -> None:
+    """Links inside code blocks are NOT rewritten."""
+    content = "```\nhttps://discord.com/channels/111/456/789\n```"
+    result = rewrite_discord_links(content, channel_map={"456": "stoat_ch"})
+    assert result == content
+
+
+def test_multiple_links() -> None:
+    """Multiple jump links and an invite link are all rewritten."""
+    content = (
+        "See https://discord.com/channels/111/456/789 and "
+        "https://discord.com/channels/111/999/100 "
+        "also https://discord.gg/invite1"
+    )
+    result = rewrite_discord_links(content, channel_map={"456": "stoat_ch1", "999": "stoat_ch2"})
+    assert "<#stoat_ch1>" in result
+    assert "<#stoat_ch2>" in result
+    assert "[Discord invite — no longer valid]" in result

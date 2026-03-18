@@ -24,17 +24,19 @@ from discord_ferry.exporter import (
     run_dce_export,
     validate_discord_token,
 )
+from discord_ferry.migrator.api import api_fetch_server, get_session, init_request_semaphore
+from discord_ferry.migrator.avatars import run_avatars
 from discord_ferry.migrator.connect import run_connect
 from discord_ferry.migrator.emoji import run_emoji
-from discord_ferry.migrator.messages import run_messages
+from discord_ferry.migrator.messages import _process_message, run_messages
 from discord_ferry.migrator.pins import run_pins
 from discord_ferry.migrator.reactions import run_reactions
 from discord_ferry.migrator.structure import run_categories, run_channels, run_roles, run_server
-from discord_ferry.parser.dce_parser import parse_export_directory, validate_export
-from discord_ferry.parser.models import DCEExport
-from discord_ferry.reporter import generate_report
+from discord_ferry.parser.dce_parser import parse_export_directory, stream_messages, validate_export
+from discord_ferry.parser.models import DCEExport, DCEMessage
+from discord_ferry.reporter import generate_markdown_report, generate_report
 from discord_ferry.review import build_review_summary
-from discord_ferry.state import MigrationState, load_state, save_state
+from discord_ferry.state import FailedMessage, MigrationState, load_state, save_state
 
 PhaseFunction = Callable[
     [FerryConfig, MigrationState, list[DCEExport], EventCallback],
@@ -50,6 +52,7 @@ PHASE_ORDER: list[str] = [
     "categories",  # Phase 5
     "channels",  # Phase 6
     "emoji",  # Phase 7
+    "avatars",  # Phase 7.5
     "messages",  # Phase 8
     "reactions",  # Phase 9
     "pins",  # Phase 10
@@ -60,6 +63,7 @@ PHASE_ORDER: list[str] = [
 _SKIPPABLE: dict[str, str] = {
     "export": "skip_export",
     "emoji": "skip_emoji",
+    "avatars": "skip_avatars",
     "messages": "skip_messages",
     "reactions": "skip_reactions",
 }
@@ -72,6 +76,7 @@ _DEFAULT_PHASES: dict[str, PhaseFunction] = {
     "categories": run_categories,
     "channels": run_channels,
     "emoji": run_emoji,
+    "avatars": run_avatars,
     "messages": run_messages,
     "reactions": run_reactions,
     "pins": run_pins,
@@ -188,8 +193,11 @@ async def run_migration(
             on_event(
                 MigrationEvent(
                     phase="export",
-                    status="progress",
-                    message="No Discord token — permissions will not be migrated",
+                    status="warning",
+                    message=(
+                        "No Discord token — permission overrides will not be migrated. "
+                        "Private channels may become publicly visible on Stoat."
+                    ),
                 )
             )
 
@@ -212,10 +220,57 @@ async def run_migration(
         )
     )
 
+    # S6: Filter threads by minimum message count
+    threads_filtered = 0
+    if config.min_thread_messages > 0:
+        filtered_exports: list[DCEExport] = []
+        for export in exports:
+            if export.is_thread and export.message_count < config.min_thread_messages:
+                threads_filtered += 1
+                state.warnings.append(
+                    {
+                        "phase": "validate",
+                        "type": "thread_filtered",
+                        "message": (
+                            f"Thread '{export.channel.name}' excluded "
+                            f"({export.message_count} messages "
+                            f"< {config.min_thread_messages} threshold)"
+                        ),
+                    }
+                )
+                on_event(
+                    MigrationEvent(
+                        phase="validate",
+                        status="warning",
+                        message=(
+                            f"Thread '{export.channel.name}' filtered out "
+                            f"({export.message_count} msgs)"
+                        ),
+                    )
+                )
+            else:
+                filtered_exports.append(export)
+        exports = filtered_exports
+
     # Pre-creation review: emit summary event and optionally wait for user confirmation
     if not config.dry_run and not config.resume:
         discord_meta = load_discord_metadata(config.output_dir)
         summary = build_review_summary(exports, discord_metadata=discord_meta)
+        summary.threads_filtered = threads_filtered
+        # Log warnings for user-specific permission overrides that Stoat cannot import
+        if discord_meta and discord_meta.user_override_channels:
+            for uo in discord_meta.user_override_channels:
+                state.warnings.append(
+                    {
+                        "phase": "review",
+                        "type": "user_override_skipped",
+                        "message": (
+                            f"Channel {uo['channel_name']} has {uo['override_count']} "
+                            "user-specific permission overrides that cannot be migrated to Stoat"
+                        ),
+                    }
+                )
+
         on_event(
             MigrationEvent(
                 phase="review",
@@ -231,7 +286,10 @@ async def run_migration(
                     "threads": summary.thread_count,
                     "has_permissions": summary.has_permissions,
                     "nsfw_channels": summary.nsfw_channel_count,
+                    "user_overrides": summary.user_override_count,
+                    "threads_filtered": summary.threads_filtered,
                     "warnings": summary.warnings,
+                    "reaction_mode": config.reaction_mode,
                 },
             )
         )
@@ -245,6 +303,8 @@ async def run_migration(
 
     # Phases 2-10: run in order, skipping as appropriate
     runnable_phases = [p for p in PHASE_ORDER if p not in ("export", "validate", "report")]
+
+    init_request_semaphore(config.max_concurrent_requests)
 
     async with aiohttp.ClientSession() as session:
         config.session = session
@@ -260,8 +320,67 @@ async def run_migration(
     on_event(MigrationEvent(phase="report", status="started", message="Generating report..."))
     state.completed_at = datetime.now(timezone.utc).isoformat()
     generate_report(config, state, exports)
+    generate_markdown_report(config, state, exports)
     save_state(state, config.output_dir)
     on_event(MigrationEvent(phase="report", status="completed", message="Migration complete"))
+
+    # Phase 12: VALIDATE_MIGRATION — optional post-migration verification
+    if config.validate_after and state.stoat_server_id:
+        state.current_phase = "validate_migration"
+        on_event(
+            MigrationEvent(
+                phase="validate_migration",
+                status="started",
+                message="Validating migration results...",
+            )
+        )
+        try:
+            async with aiohttp.ClientSession() as validation_session:
+                server = await api_fetch_server(
+                    validation_session, config.stoat_url, config.token, state.stoat_server_id
+                )
+            actual_channels = len(server.get("channels", []))
+            actual_roles = len(server.get("roles", {}))
+            expected_channels = len(state.channel_map)
+            expected_roles = len(state.role_map)
+            failed_count = len(state.failed_messages)
+
+            state.validation_results = {
+                "channels_expected": expected_channels,
+                "channels_found": actual_channels,
+                "roles_expected": expected_roles,
+                "roles_found": actual_roles,
+                "failed_messages": failed_count,
+                "passed": actual_channels == expected_channels and actual_roles == expected_roles,
+            }
+
+            if state.validation_results["passed"]:
+                msg = f"Validation passed: {actual_channels} channels, {actual_roles} roles match."
+            else:
+                msg = (
+                    f"Validation warning: expected {expected_channels} channels "
+                    f"(found {actual_channels}), expected {expected_roles} roles "
+                    f"(found {actual_roles})."
+                )
+            if failed_count:
+                msg += f" {failed_count} messages failed (see failed_message_ids in report)."
+
+            on_event(
+                MigrationEvent(
+                    phase="validate_migration",
+                    status="completed" if state.validation_results["passed"] else "warning",
+                    message=msg,
+                )
+            )
+        except Exception as exc:  # noqa: BLE001
+            on_event(
+                MigrationEvent(
+                    phase="validate_migration",
+                    status="warning",
+                    message=f"Validation skipped: {exc}",
+                )
+            )
+        save_state(state, config.output_dir)
 
     return state
 
@@ -355,3 +474,103 @@ async def _run_phases(
             MigrationEvent(phase=phase_name, status="completed", message=f"Completed {phase_name}")
         )
         save_state(state, config.output_dir)
+
+
+async def run_retry_failed(
+    config: FerryConfig,
+    state: MigrationState,
+    exports: list[DCEExport],
+    on_event: EventCallback,
+) -> None:
+    """Re-process failed messages from state.failed_messages.
+
+    Uses a single-scan strategy: collects all failed message IDs, then
+    scans exports once to find matching DCEMessage objects.
+    """
+    if not state.failed_messages:
+        on_event(
+            MigrationEvent(
+                phase="retry", status="completed", message="No failed messages to retry."
+            )
+        )
+        return
+
+    # Ensure request semaphore is initialized (may be called standalone, not from run_migration).
+    init_request_semaphore(config.max_concurrent_requests)
+
+    if not config.export_dir.exists():
+        on_event(
+            MigrationEvent(
+                phase="retry",
+                status="error",
+                message=f"Cannot retry: export directory not found at {config.export_dir}",
+            )
+        )
+        return
+
+    # Collect failed IDs for single-scan lookup
+    failed_ids = {fm.discord_msg_id for fm in state.failed_messages}
+
+    on_event(
+        MigrationEvent(
+            phase="retry",
+            status="started",
+            message=f"Retrying {len(failed_ids)} failed messages",
+        )
+    )
+
+    # Scan all exports once, collect matching messages
+    found_messages: dict[str, DCEMessage] = {}
+    for export in exports:
+        msg_iter = (
+            stream_messages(export.json_path)
+            if export.json_path is not None
+            else iter(export.messages)
+        )
+        for msg in msg_iter:
+            if msg.id in failed_ids:
+                found_messages[msg.id] = msg
+
+    async with get_session(config) as session:
+        config.session = session
+        retried = 0
+        still_failed: list[FailedMessage] = []
+        for fm in state.failed_messages:
+            found_msg = found_messages.get(fm.discord_msg_id)
+            if found_msg is None:
+                on_event(
+                    MigrationEvent(
+                        phase="retry",
+                        status="warning",
+                        message=f"Message {fm.discord_msg_id} not found in exports — skipping.",
+                    )
+                )
+                still_failed.append(fm)
+                continue
+
+            stoat_channel_id = fm.stoat_channel_id
+            try:
+                await _process_message(
+                    msg=found_msg,
+                    stoat_channel_id=stoat_channel_id,
+                    config=config,
+                    state=state,
+                    session=session,
+                    on_event=on_event,
+                )
+                retried += 1
+            except Exception:  # noqa: BLE001
+                fm.retry_count += 1
+                still_failed.append(fm)
+        state.failed_messages = still_failed
+    config.session = None
+
+    save_state(state, config.output_dir)
+    remaining = len(state.failed_messages)
+    on_event(
+        MigrationEvent(
+            phase="retry",
+            status="completed",
+            message=f"Retry complete: {retried} succeeded, {remaining} still failed.",
+        )
+    )

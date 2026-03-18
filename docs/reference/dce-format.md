@@ -164,6 +164,10 @@ Unknown type strings are logged as warnings and the message is skipped.
 When `--media` is used, `avatarUrl` and `attachment.url` are relative paths within the export
 directory (e.g. `media/attachments/image.png`). Ferry resolves these relative to the export root.
 
+**`timestampEdited`**: If present (non-null), indicates the message was edited after original send.
+Ferry prepends `*(edited)*` to the migrated message content, after the timestamp prefix. Example:
+`*[2024-01-15 12:00 UTC]* *(edited)* Hello everyone!`
+
 **Stickers**: If `sourceUrl` is a local relative path (downloaded via `--media`), Ferry uploads the
 image as a message attachment. Lottie stickers and missing files fall back to a text placeholder
 like `[Sticker: wave]`.

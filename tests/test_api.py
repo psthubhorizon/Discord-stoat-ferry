@@ -2,19 +2,22 @@
 
 from __future__ import annotations
 
+import logging
+from unittest.mock import AsyncMock, patch
+
 import aiohttp
 import pytest
 from aioresponses import aioresponses
 
 from discord_ferry.errors import MigrationError
 from discord_ferry.migrator.api import (
+    _circuit_state,
+    _reset_circuit_state,
     api_add_reaction,
-    api_create_category,
     api_create_channel,
     api_create_emoji,
     api_create_role,
     api_create_server,
-    api_edit_category,
     api_edit_role,
     api_edit_server,
     api_fetch_server,
@@ -24,6 +27,8 @@ from discord_ferry.migrator.api import (
     api_set_channel_role_permissions,
     api_set_role_permissions,
     api_set_server_default_permissions,
+    api_upsert_categories,
+    init_request_semaphore,
 )
 
 BASE_URL = "https://api.test"
@@ -33,6 +38,18 @@ TOKEN = "test-session-token"
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _clean_circuit() -> None:  # type: ignore[misc]
+    """Reset circuit breaker and semaphore state between tests."""
+    import discord_ferry.migrator.api as _api_mod
+
+    _reset_circuit_state()
+    _api_mod._request_semaphore = None
+    yield  # type: ignore[misc]
+    _reset_circuit_state()
+    _api_mod._request_semaphore = None
 
 
 @pytest.fixture
@@ -109,38 +126,23 @@ async def test_api_edit_role(mock_aiohttp: aioresponses) -> None:
 
 
 # ---------------------------------------------------------------------------
-# api_create_category
+# api_upsert_categories
 # ---------------------------------------------------------------------------
 
 
-async def test_api_create_category(mock_aiohttp: aioresponses) -> None:
-    """POST /servers/srv1/categories returns the new category dict including id."""
-    mock_aiohttp.post(
-        f"{BASE_URL}/servers/srv1/categories",
-        payload={"id": "cat42", "title": "General"},
-        status=201,
-    )
-    async with aiohttp.ClientSession() as session:
-        result = await api_create_category(session, BASE_URL, TOKEN, "srv1", "General")
-    assert result["id"] == "cat42"
-    assert result["title"] == "General"
-
-
-# ---------------------------------------------------------------------------
-# api_edit_category
-# ---------------------------------------------------------------------------
-
-
-async def test_api_edit_category(mock_aiohttp: aioresponses) -> None:
-    """PATCH /servers/srv1/categories/cat1 sends the channels list in the body."""
-    channels = ["ch1", "ch2", "ch3"]
+async def test_api_upsert_categories(mock_aiohttp: aioresponses) -> None:
+    """PATCH /servers/srv1 with categories array in the body."""
+    categories = [
+        {"id": "cat1", "title": "General", "channels": ["ch1", "ch2"]},
+        {"id": "cat2", "title": "Off-Topic", "channels": []},
+    ]
     mock_aiohttp.patch(
-        f"{BASE_URL}/servers/srv1/categories/cat1",
-        payload={"id": "cat1", "channels": channels},
+        f"{BASE_URL}/servers/srv1",
+        payload={"_id": "srv1", "categories": categories},
     )
     async with aiohttp.ClientSession() as session:
-        result = await api_edit_category(session, BASE_URL, TOKEN, "srv1", "cat1", channels)
-    assert result["channels"] == channels
+        result = await api_upsert_categories(session, BASE_URL, TOKEN, "srv1", categories)
+    assert result["categories"] == categories
 
 
 # ---------------------------------------------------------------------------
@@ -198,17 +200,23 @@ async def test_api_error_403(mock_aiohttp: aioresponses) -> None:
 
 
 async def test_api_create_emoji(mock_aiohttp: aioresponses) -> None:
-    """POST /servers/srv1/emojis sends name and parent (Autumn ID) in the body."""
-    mock_aiohttp.post(
-        f"{BASE_URL}/servers/srv1/emojis",
-        payload={"_id": "emoji42", "name": "party", "parent": "autumn123"},
-        status=200,
+    """PUT /custom/emoji/{autumn_id} sends name and parent object in the body."""
+    captured_body: dict[str, object] = {}
+
+    def capture_callback(url: object, **kwargs: object) -> None:
+        body = kwargs.get("json") or {}
+        captured_body.update(body)  # type: ignore[arg-type]
+
+    mock_aiohttp.put(
+        f"{BASE_URL}/custom/emoji/autumn123",
+        payload={"_id": "autumn123", "name": "party"},
+        callback=capture_callback,
     )
     async with aiohttp.ClientSession() as session:
-        result = await api_create_emoji(session, BASE_URL, TOKEN, "srv1", "party", "autumn123")
-    assert result["_id"] == "emoji42"
-    assert result["name"] == "party"
-    assert result["parent"] == "autumn123"
+        result = await api_create_emoji(session, BASE_URL, TOKEN, "autumn123", "party", "srv1")
+    assert result["_id"] == "autumn123"
+    assert captured_body["name"] == "party"
+    assert captured_body["parent"] == {"type": "Server", "id": "srv1"}
 
 
 # ---------------------------------------------------------------------------
@@ -217,7 +225,7 @@ async def test_api_create_emoji(mock_aiohttp: aioresponses) -> None:
 
 
 async def test_api_send_message(mock_aiohttp: aioresponses) -> None:
-    """POST /channels/ch1/messages sends content, nonce, and excludes None fields."""
+    """POST /channels/ch1/messages sends content with idempotency_key header."""
     mock_aiohttp.post(
         f"{BASE_URL}/channels/ch1/messages",
         payload={"_id": "msg99", "content": "Hello"},
@@ -230,10 +238,40 @@ async def test_api_send_message(mock_aiohttp: aioresponses) -> None:
             TOKEN,
             "ch1",
             content="Hello",
-            nonce="ferry-discord123",
+            idempotency_key="ferry-discord123",
         )
     assert result["_id"] == "msg99"
     assert result["content"] == "Hello"
+
+
+async def test_api_send_message_idempotency_key_header(mock_aiohttp: aioresponses) -> None:
+    """api_send_message sends idempotency_key as Idempotency-Key HTTP header, not in body."""
+    captured_headers: dict[str, str] = {}
+    captured_body: dict[str, object] = {}
+
+    def capture_callback(url: object, **kwargs: object) -> None:
+        hdrs = kwargs.get("headers") or {}
+        captured_headers.update(hdrs)  # type: ignore[arg-type]
+        body = kwargs.get("json") or {}
+        captured_body.update(body)  # type: ignore[arg-type]
+
+    mock_aiohttp.post(
+        f"{BASE_URL}/channels/ch1/messages",
+        payload={"_id": "msg99"},
+        callback=capture_callback,
+    )
+    async with aiohttp.ClientSession() as session:
+        await api_send_message(
+            session,
+            BASE_URL,
+            TOKEN,
+            "ch1",
+            content="Hello",
+            idempotency_key="ferry-discord123",
+        )
+
+    assert captured_headers.get("Idempotency-Key") == "ferry-discord123"
+    assert "nonce" not in captured_body
 
 
 async def test_api_send_message_excludes_none_fields(mock_aiohttp: aioresponses) -> None:
@@ -473,3 +511,174 @@ async def test_api_set_channel_default_permissions(mock_aiohttp: aioresponses) -
         await api_set_channel_default_permissions(
             session, BASE_URL, TOKEN, "ch1", allow=4194304, deny=0
         )
+
+
+# ---------------------------------------------------------------------------
+# Exponential backoff tests
+# ---------------------------------------------------------------------------
+
+
+async def test_exponential_backoff_timing(mock_aiohttp: aioresponses) -> None:
+    """5xx retries use exponential delays: ~1, ~2, then fail (3 attempts)."""
+    for _ in range(3):
+        mock_aiohttp.get(f"{BASE_URL}/servers/srv1", status=502, body="Bad Gateway")
+
+    sleep_calls: list[float] = []
+    original_sleep = AsyncMock(side_effect=lambda d: sleep_calls.append(d))
+
+    with patch("discord_ferry.migrator.api.asyncio.sleep", original_sleep):
+        async with aiohttp.ClientSession() as session:
+            with pytest.raises(MigrationError, match="API request failed after 3 retries"):
+                await api_fetch_server(session, BASE_URL, TOKEN, "srv1")
+
+    # Two sleeps (attempts 0 and 1 — attempt 2 raises immediately).
+    assert len(sleep_calls) == 2
+    # Attempt 0: 2^0 + jitter = ~1.1–1.5
+    assert 1.0 <= sleep_calls[0] <= 1.6
+    # Attempt 1: 2^1 + jitter = ~2.1–2.5
+    assert 2.0 <= sleep_calls[1] <= 2.6
+
+
+async def test_429_uses_retry_after(mock_aiohttp: aioresponses) -> None:
+    """429 uses retry_after from response body, not exponential backoff."""
+    mock_aiohttp.get(f"{BASE_URL}/servers/srv1", status=429, payload={"retry_after": 200})
+    mock_aiohttp.get(f"{BASE_URL}/servers/srv1", payload={"_id": "srv1", "name": "OK"})
+
+    sleep_calls: list[float] = []
+    original_sleep = AsyncMock(side_effect=lambda d: sleep_calls.append(d))
+
+    with patch("discord_ferry.migrator.api.asyncio.sleep", original_sleep):
+        async with aiohttp.ClientSession() as session:
+            result = await api_fetch_server(session, BASE_URL, TOKEN, "srv1")
+
+    assert result["_id"] == "srv1"
+    # Should have slept for retry_after ms converted to seconds (0.2s).
+    assert len(sleep_calls) == 1
+    assert sleep_calls[0] == pytest.approx(0.2, abs=0.01)
+
+
+# ---------------------------------------------------------------------------
+# Circuit breaker tests
+# ---------------------------------------------------------------------------
+
+
+async def test_circuit_opens_after_consecutive_failures(
+    mock_aiohttp: aioresponses, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Circuit breaker opens after _CIRCUIT_THRESHOLD consecutive failures."""
+    # Pre-load the circuit state just below threshold.
+    _circuit_state.consecutive_failures = 4
+
+    # This request will fail (502 x3), pushing failures to 5+ before next call.
+    for _ in range(3):
+        mock_aiohttp.get(f"{BASE_URL}/servers/srv1", status=502, body="Bad Gateway")
+
+    with patch("discord_ferry.migrator.api.asyncio.sleep", new_callable=AsyncMock):
+        async with aiohttp.ClientSession() as session:
+            with pytest.raises(MigrationError):
+                await api_fetch_server(session, BASE_URL, TOKEN, "srv1")
+
+    # Failures were incremented: 4 + 2 retries + 1 final = 7
+    assert _circuit_state.consecutive_failures >= 5
+
+    # Next call should trigger circuit breaker warning.
+    mock_aiohttp.get(f"{BASE_URL}/servers/srv1", payload={"_id": "srv1", "name": "OK"})
+    with (
+        patch("discord_ferry.migrator.api.asyncio.sleep", new_callable=AsyncMock),
+        caplog.at_level(logging.WARNING, logger="discord_ferry.migrator.api"),
+    ):
+        async with aiohttp.ClientSession() as session:
+            await api_fetch_server(session, BASE_URL, TOKEN, "srv1")
+
+    assert "Circuit breaker open" in caplog.text
+
+
+async def test_circuit_resets_on_success(mock_aiohttp: aioresponses) -> None:
+    """A successful request resets the circuit failure counter to zero."""
+    _circuit_state.consecutive_failures = 4
+
+    mock_aiohttp.get(f"{BASE_URL}/servers/srv1", payload={"_id": "srv1", "name": "OK"})
+    async with aiohttp.ClientSession() as session:
+        await api_fetch_server(session, BASE_URL, TOKEN, "srv1")
+
+    assert _circuit_state.consecutive_failures == 0
+
+
+async def test_429_not_counted_as_circuit_failure(mock_aiohttp: aioresponses) -> None:
+    """429 rate-limited responses do not increment circuit failure counter."""
+    mock_aiohttp.get(f"{BASE_URL}/servers/srv1", status=429, payload={"retry_after": 10})
+    mock_aiohttp.get(f"{BASE_URL}/servers/srv1", payload={"_id": "srv1", "name": "OK"})
+
+    with patch("discord_ferry.migrator.api.asyncio.sleep", new_callable=AsyncMock):
+        async with aiohttp.ClientSession() as session:
+            await api_fetch_server(session, BASE_URL, TOKEN, "srv1")
+
+    # Counter should be 0: 429 doesn't increment, success resets.
+    assert _circuit_state.consecutive_failures == 0
+
+
+# ---------------------------------------------------------------------------
+# Semaphore tests
+# ---------------------------------------------------------------------------
+
+
+async def test_semaphore_not_initialized(mock_aiohttp: aioresponses) -> None:
+    """Requests work correctly without initializing the semaphore."""
+    import discord_ferry.migrator.api as _api_mod
+
+    assert _api_mod._request_semaphore is None
+
+    mock_aiohttp.get(f"{BASE_URL}/servers/srv1", payload={"_id": "srv1", "name": "OK"})
+    async with aiohttp.ClientSession() as session:
+        result = await api_fetch_server(session, BASE_URL, TOKEN, "srv1")
+    assert result["_id"] == "srv1"
+
+
+async def test_max_concurrent_zero_clamped(mock_aiohttp: aioresponses) -> None:
+    """init_request_semaphore(0) clamps to 1 and still works."""
+    init_request_semaphore(0)
+
+    import discord_ferry.migrator.api as _api_mod
+
+    assert _api_mod._request_semaphore is not None
+    # Semaphore value should be 1 (clamped from 0)
+    assert _api_mod._request_semaphore._value == 1  # type: ignore[attr-defined]
+
+    mock_aiohttp.get(f"{BASE_URL}/servers/srv1", payload={"_id": "srv1", "name": "OK"})
+    async with aiohttp.ClientSession() as session:
+        result = await api_fetch_server(session, BASE_URL, TOKEN, "srv1")
+    assert result["_id"] == "srv1"
+
+
+async def test_semaphore_initialized_limits_concurrency(mock_aiohttp: aioresponses) -> None:
+    """When semaphore is initialized, requests flow through it."""
+    init_request_semaphore(3)
+
+    mock_aiohttp.get(f"{BASE_URL}/servers/srv1", payload={"_id": "srv1", "name": "OK"})
+    async with aiohttp.ClientSession() as session:
+        result = await api_fetch_server(session, BASE_URL, TOKEN, "srv1")
+    assert result["_id"] == "srv1"
+
+
+async def test_network_error_exponential_backoff(mock_aiohttp: aioresponses) -> None:
+    """Network errors also use exponential backoff with jitter."""
+    for _ in range(3):
+        mock_aiohttp.get(
+            f"{BASE_URL}/servers/srv1",
+            exception=aiohttp.ClientError("Connection refused"),
+        )
+
+    sleep_calls: list[float] = []
+    original_sleep = AsyncMock(side_effect=lambda d: sleep_calls.append(d))
+
+    with patch("discord_ferry.migrator.api.asyncio.sleep", original_sleep):
+        async with aiohttp.ClientSession() as session:
+            with pytest.raises(MigrationError, match="Network error after 3 retries"):
+                await api_fetch_server(session, BASE_URL, TOKEN, "srv1")
+
+    # Two sleeps (attempts 0 and 1 — attempt 2 raises immediately).
+    assert len(sleep_calls) == 2
+    # Attempt 0: 2^0 + jitter = ~1.1–1.5
+    assert 1.0 <= sleep_calls[0] <= 1.6
+    # Attempt 1: 2^1 + jitter = ~2.1–2.5
+    assert 2.0 <= sleep_calls[1] <= 2.6

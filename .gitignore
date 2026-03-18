@@ -37,9 +37,15 @@ venv/
 # Ferry output (migration results)
 ferry-output/
 
-# Claude Code session logs
+# Claude Code (all internal tooling)
+.claude/
+CLAUDE.md
 claude_log/
-.claude/handoffs/
+.mcp.json
+
+# Internal design docs (kept locally, not in public repo)
+docs/plans/
+docs/discord-ferry-claude-code-brief.md
 
 # MkDocs build output
 site/

@@ -10,8 +10,8 @@ from discord_ferry.discord.metadata import (
     save_discord_metadata,
 )
 from discord_ferry.parser.models import DCEChannel, DCEExport, DCEGuild
-from discord_ferry.reporter import generate_report
-from discord_ferry.state import MigrationState
+from discord_ferry.reporter import generate_markdown_report, generate_report
+from discord_ferry.state import FailedMessage, MigrationState
 
 
 def _make_config(tmp_path: Path) -> FerryConfig:
@@ -393,3 +393,226 @@ def test_checklist_with_emoji(tmp_path: Path) -> None:
     assert isinstance(checklist, list)
     tasks = [item["task"] for item in checklist]  # type: ignore[index]
     assert any("Verify custom emoji" in t for t in tasks)
+
+
+def test_report_includes_user_override_channels(tmp_path: Path) -> None:
+    """Report includes user_override_channels when warnings exist."""
+    from discord_ferry.discord.metadata import ChannelMeta
+
+    config = _make_config(tmp_path)
+    state = MigrationState(
+        warnings=[
+            {
+                "phase": "review",
+                "type": "user_override_skipped",
+                "message": "Channel general has 3 user-specific permission overrides",
+            },
+        ]
+    )
+    exports = [_make_export()]
+
+    # Save metadata with user overrides so report can read it
+    meta = DiscordMetadata(
+        guild_id="111",
+        fetched_at="t",
+        server_default_permissions=0,
+        role_permissions={},
+        channel_metadata={"ch1": ChannelMeta(nsfw=False)},
+        user_override_channels=[
+            {"channel_id": "ch1", "channel_name": "general", "override_count": 3},
+        ],
+    )
+    save_discord_metadata(meta, tmp_path)
+
+    report = generate_report(config, state, exports)
+
+    checklist = report["checklist"]
+    assert isinstance(checklist, list)
+    tasks = [item["task"] for item in checklist]  # type: ignore[index]
+    assert any("user-specific permission" in t.lower() for t in tasks)
+
+
+def test_report_no_user_override_checklist_when_none(tmp_path: Path) -> None:
+    """Report does not include user override checklist item when no overrides."""
+    config = _make_config(tmp_path)
+    state = MigrationState()
+    exports = [_make_export()]
+
+    report = generate_report(config, state, exports)
+
+    checklist = report["checklist"]
+    assert isinstance(checklist, list)
+    tasks = [item["task"] for item in checklist]  # type: ignore[index]
+    assert not any("user-specific permission" in t.lower() for t in tasks)
+
+
+# ---------------------------------------------------------------------------
+# Orphan upload tracking (S5)
+# ---------------------------------------------------------------------------
+
+
+def test_report_zero_orphans_no_warning(tmp_path: Path) -> None:
+    """When all uploads are referenced, report shows orphaned_uploads=0, no orphaned_ids."""
+    config = _make_config(tmp_path)
+    state = MigrationState(
+        autumn_uploads={"autumn1": "att1", "autumn2": "att2"},
+        referenced_autumn_ids={"autumn1", "autumn2"},
+    )
+    exports = [_make_export()]
+
+    report = generate_report(config, state, exports)
+
+    assert report["orphaned_uploads"] == 0
+    assert "orphaned_ids" not in report
+
+
+def test_report_lists_orphaned_ids(tmp_path: Path) -> None:
+    """When uploads are not referenced, report includes orphaned_uploads count and IDs."""
+    config = _make_config(tmp_path)
+    state = MigrationState(
+        autumn_uploads={"autumn1": "att1", "autumn2": "att2", "autumn3": "att3"},
+        referenced_autumn_ids={"autumn1"},  # only autumn1 was used
+    )
+    exports = [_make_export()]
+
+    report = generate_report(config, state, exports)
+
+    assert report["orphaned_uploads"] == 2
+    assert set(report["orphaned_ids"]) == {"autumn2", "autumn3"}  # type: ignore[arg-type]
+
+
+# ---------------------------------------------------------------------------
+# Failed message reporting (S1)
+# ---------------------------------------------------------------------------
+
+
+def test_report_includes_failed_message_count_and_ids(tmp_path: Path) -> None:
+    """Report includes failed_messages count and failed_message_ids list."""
+    config = _make_config(tmp_path)
+    state = MigrationState(
+        failed_messages=[
+            FailedMessage(
+                discord_msg_id="msg1",
+                stoat_channel_id="ch1",
+                error="API timeout",
+            ),
+            FailedMessage(
+                discord_msg_id="msg2",
+                stoat_channel_id="ch2",
+                error="Rate limited",
+                content_preview="hello",
+            ),
+        ],
+    )
+    exports = [_make_export()]
+
+    report = generate_report(config, state, exports)
+
+    assert report["failed_messages"] == 2
+    assert set(report["failed_message_ids"]) == {"msg1", "msg2"}  # type: ignore[arg-type]
+
+
+# ---------------------------------------------------------------------------
+# Post-migration validation results (S7)
+# ---------------------------------------------------------------------------
+
+
+def test_report_includes_validation_results(tmp_path: Path) -> None:
+    """Report includes 'validation' key when state has validation_results."""
+    config = _make_config(tmp_path)
+    state = MigrationState(
+        validation_results={
+            "channels_expected": 5,
+            "channels_found": 5,
+            "roles_expected": 2,
+            "roles_found": 2,
+            "failed_messages": 0,
+            "passed": True,
+        }
+    )
+    exports = [_make_export()]
+
+    report = generate_report(config, state, exports)
+
+    assert "validation" in report
+    assert report["validation"]["passed"] is True
+    assert report["validation"]["channels_expected"] == 5
+    assert report["validation"]["channels_found"] == 5
+
+
+def test_report_no_validation_when_empty(tmp_path: Path) -> None:
+    """Report does not include 'validation' key when validation_results is empty."""
+    config = _make_config(tmp_path)
+    state = MigrationState()  # validation_results defaults to {}
+    exports = [_make_export()]
+
+    report = generate_report(config, state, exports)
+
+    assert "validation" not in report
+
+
+# ---------------------------------------------------------------------------
+# Markdown migration report (S6)
+# ---------------------------------------------------------------------------
+
+
+def test_markdown_report_file_created(tmp_path: Path) -> None:
+    """generate_markdown_report writes migration_report.md to output_dir."""
+    config = _make_config(tmp_path)
+    state = MigrationState()
+    exports = [_make_export()]
+
+    generate_markdown_report(config, state, exports)
+
+    assert (tmp_path / "migration_report.md").exists()
+
+
+def test_markdown_report_contains_summary(tmp_path: Path) -> None:
+    """Markdown report contains key summary table rows."""
+    config = _make_config(tmp_path)
+    state = MigrationState(
+        channel_map={"d1": "s1", "d2": "s2"},
+        message_map={"m1": "sm1"},
+    )
+    exports = [_make_export()]
+
+    generate_markdown_report(config, state, exports)
+
+    content = (tmp_path / "migration_report.md").read_text(encoding="utf-8")
+    assert "Channels created" in content
+    assert "Messages imported" in content
+    assert "| 2 |" in content  # 2 channels
+    assert "| 1 |" in content  # 1 message
+
+
+def test_markdown_report_lists_failed_messages(tmp_path: Path) -> None:
+    """Markdown report lists each failed message ID and error."""
+    config = _make_config(tmp_path)
+    state = MigrationState(
+        failed_messages=[
+            FailedMessage(discord_msg_id="msg_aaa", stoat_channel_id="ch1", error="Timeout"),
+            FailedMessage(discord_msg_id="msg_bbb", stoat_channel_id="ch2", error="Rate limited"),
+        ],
+    )
+    exports = [_make_export()]
+
+    generate_markdown_report(config, state, exports)
+
+    content = (tmp_path / "migration_report.md").read_text(encoding="utf-8")
+    assert "msg_aaa" in content
+    assert "msg_bbb" in content
+    assert "Timeout" in content
+    assert "Rate limited" in content
+
+
+def test_markdown_report_empty_state(tmp_path: Path) -> None:
+    """Markdown report handles empty state gracefully with 'No errors.' text."""
+    config = _make_config(tmp_path)
+    state = MigrationState()
+    exports = [_make_export()]
+
+    generate_markdown_report(config, state, exports)
+
+    content = (tmp_path / "migration_report.md").read_text(encoding="utf-8")
+    assert "No errors." in content
+    assert "No warnings." in content

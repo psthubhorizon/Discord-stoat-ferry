@@ -125,6 +125,10 @@ async def test_fetch_and_translate_metadata(mock_discord: aioresponses) -> None:
     """Full pipeline: fetch -> translate -> DiscordMetadata."""
     guild_id = "111"
     mock_discord.get(
+        f"{DISCORD_API}/guilds/{guild_id}",
+        payload={"id": guild_id, "name": "Test", "banner": None},
+    )
+    mock_discord.get(
         f"{DISCORD_API}/guilds/{guild_id}/roles",
         payload=[
             # @everyone role (id == guild_id)

@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
-from discord_ferry.discord.client import fetch_guild_channels, fetch_guild_roles
+from discord_ferry.discord.client import fetch_guild, fetch_guild_channels, fetch_guild_roles
 from discord_ferry.discord.metadata import (
     ChannelMeta,
     DiscordMetadata,
@@ -40,6 +40,9 @@ async def fetch_and_translate_guild_metadata(
     Returns:
         DiscordMetadata with all permissions translated to Stoat bit space.
     """
+    guild_data = await fetch_guild(session, token, guild_id)
+    banner_hash = str(guild_data.get("banner") or "")
+
     roles = await fetch_guild_roles(session, token, guild_id)
     channels = await fetch_guild_channels(session, token, guild_id)
 
@@ -57,25 +60,36 @@ async def fetch_and_translate_guild_metadata(
 
     # Build channel metadata (filter user overrides, translate permissions)
     channel_metadata: dict[str, ChannelMeta] = {}
+    user_override_channels: list[dict[str, object]] = []
     for channel in channels:
         default_override: PermissionPair | None = None
         role_overrides: list[RoleOverride] = []
+        user_override_count = 0
         for ow in channel.permission_overwrites:
             if ow.type == 1:  # User override — Stoat doesn't support these
+                user_override_count += 1
                 continue
             if ow.id == guild_id:  # @everyone channel override → default_override
                 default_override = PermissionPair(
                     allow=translate_permissions(ow.allow),
-                    deny=translate_permissions(ow.deny),
+                    deny=translate_permissions(ow.deny, is_deny=True),
                 )
             else:
                 role_overrides.append(
                     RoleOverride(
                         discord_role_id=ow.id,
                         allow=translate_permissions(ow.allow),
-                        deny=translate_permissions(ow.deny),
+                        deny=translate_permissions(ow.deny, is_deny=True),
                     )
                 )
+        if user_override_count > 0:
+            user_override_channels.append(
+                {
+                    "channel_id": channel.id,
+                    "channel_name": channel.name,
+                    "override_count": user_override_count,
+                }
+            )
         channel_metadata[channel.id] = ChannelMeta(
             nsfw=channel.nsfw,
             default_override=default_override,
@@ -88,4 +102,6 @@ async def fetch_and_translate_guild_metadata(
         server_default_permissions=server_default,
         role_permissions=role_permissions,
         channel_metadata=channel_metadata,
+        user_override_channels=user_override_channels,
+        banner_hash=banner_hash,
     )
