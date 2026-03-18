@@ -210,6 +210,9 @@ async def run_avatars(
                     config.upload_delay,
                 )
                 state.avatar_cache[author_id] = autumn_id
+                state.autumn_uploads[autumn_id] = author_id
+                # Avatars are always referenced via masquerade
+                state.referenced_autumn_ids.add(autumn_id)
                 uploaded += 1
 
                 # Periodic state save every 10 avatars for crash recovery.

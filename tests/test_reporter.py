@@ -444,3 +444,38 @@ def test_report_no_user_override_checklist_when_none(tmp_path: Path) -> None:
     assert isinstance(checklist, list)
     tasks = [item["task"] for item in checklist]  # type: ignore[index]
     assert not any("user-specific permission" in t.lower() for t in tasks)
+
+
+# ---------------------------------------------------------------------------
+# Orphan upload tracking (S5)
+# ---------------------------------------------------------------------------
+
+
+def test_report_zero_orphans_no_warning(tmp_path: Path) -> None:
+    """When all uploads are referenced, report shows orphaned_uploads=0, no orphaned_ids."""
+    config = _make_config(tmp_path)
+    state = MigrationState(
+        autumn_uploads={"autumn1": "att1", "autumn2": "att2"},
+        referenced_autumn_ids={"autumn1", "autumn2"},
+    )
+    exports = [_make_export()]
+
+    report = generate_report(config, state, exports)
+
+    assert report["orphaned_uploads"] == 0
+    assert "orphaned_ids" not in report
+
+
+def test_report_lists_orphaned_ids(tmp_path: Path) -> None:
+    """When uploads are not referenced, report includes orphaned_uploads count and IDs."""
+    config = _make_config(tmp_path)
+    state = MigrationState(
+        autumn_uploads={"autumn1": "att1", "autumn2": "att2", "autumn3": "att3"},
+        referenced_autumn_ids={"autumn1"},  # only autumn1 was used
+    )
+    exports = [_make_export()]
+
+    report = generate_report(config, state, exports)
+
+    assert report["orphaned_uploads"] == 2
+    assert set(report["orphaned_ids"]) == {"autumn2", "autumn3"}  # type: ignore[arg-type]

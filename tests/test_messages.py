@@ -1612,3 +1612,61 @@ async def test_checkpoint_interval_from_config(tmp_path: Path, mock_aiohttp: aio
     checkpoint_counts = [e.current for e in progress_with_current]
     assert 2 in checkpoint_counts, f"Expected checkpoint at message 2, got {checkpoint_counts}"
     assert 4 in checkpoint_counts, f"Expected checkpoint at message 4, got {checkpoint_counts}"
+
+
+# ---------------------------------------------------------------------------
+# Orphan upload tracking (S5)
+# ---------------------------------------------------------------------------
+
+
+async def test_successful_send_marks_referenced(tmp_path: Path, mock_aiohttp: aioresponses) -> None:
+    """After a successful api_send_message, autumn_ids are added to referenced_autumn_ids."""
+    att_file = tmp_path / "file.png"
+    att_file.write_bytes(b"data")
+    mock_aiohttp.post(f"{AUTUMN_URL}/attachments", payload={"id": "autumn_att1"})
+    mock_aiohttp.post(CHANNEL_MSG_URL, payload={"_id": "stoat_msg1"})
+
+    state = _make_state()
+    config = _make_config(tmp_path)
+    att = DCEAttachment(id="att1", url="file.png", file_name="file.png")
+    msg = _make_message(id="msg1", content="with file", attachments=[att])
+    export = _make_export(messages=[msg])
+
+    await run_messages(config, state, [export], lambda e: None)
+
+    # The uploaded autumn_id should be tracked and referenced
+    assert "autumn_att1" in state.autumn_uploads
+    assert state.autumn_uploads["autumn_att1"] == "att1"
+    assert "autumn_att1" in state.referenced_autumn_ids
+
+
+async def test_failed_send_leaves_orphan(tmp_path: Path) -> None:
+    """When api_send_message fails, uploaded files remain in autumn_uploads but NOT referenced."""
+
+    async def always_fail(
+        session: Any, stoat_url: Any, token: Any, channel_id: Any, **kwargs: Any
+    ) -> dict[str, Any]:
+        raise RuntimeError("API down")
+
+    att_file = tmp_path / "file.png"
+    att_file.write_bytes(b"data")
+
+    state = _make_state()
+    config = _make_config(tmp_path)
+    att = DCEAttachment(id="att1", url="file.png", file_name="file.png")
+    msg = _make_message(id="msg1", content="with file", attachments=[att])
+    export = _make_export(messages=[msg])
+
+    with (
+        patch("discord_ferry.migrator.messages.api_send_message", always_fail),
+        patch(
+            "discord_ferry.migrator.messages.upload_with_cache",
+            return_value="autumn_orphan1",
+        ),
+    ):
+        await run_messages(config, state, [export], lambda e: None)
+
+    # Upload was tracked...
+    assert "autumn_orphan1" in state.autumn_uploads
+    # ...but NOT marked as referenced (send failed)
+    assert "autumn_orphan1" not in state.referenced_autumn_ids

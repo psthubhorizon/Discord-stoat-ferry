@@ -324,3 +324,34 @@ async def test_duplicate_authors_across_exports(tmp_path: Path) -> None:
 
     assert mock_upload.call_count == 1
     assert state.avatar_cache == {"user1": "autumn_av1"}
+
+
+# ---------------------------------------------------------------------------
+# Orphan upload tracking (S5)
+# ---------------------------------------------------------------------------
+
+
+async def test_avatar_upload_tracked_and_referenced(tmp_path: Path) -> None:
+    """Successful avatar upload is tracked in autumn_uploads AND marked as referenced."""
+    avatar1 = tmp_path / "avatar_user1.webp"
+    avatar1.write_bytes(b"RIFF\x00\x00\x00\x00WEBP")
+
+    author = _make_author("user1", "Alice", avatar_url="avatar_user1.webp")
+    export = _make_export([_make_message("m1", author)])
+    config = _make_config(tmp_path)
+    state = _make_state()
+    events: list[MigrationEvent] = []
+
+    with patch(
+        "discord_ferry.migrator.avatars.upload_with_cache",
+        new=AsyncMock(return_value="autumn_av1"),
+    ):
+        await run_avatars(config, state, [export], events.append)
+
+    # Avatar is in avatar_cache
+    assert state.avatar_cache == {"user1": "autumn_av1"}
+    # Avatar is tracked in autumn_uploads
+    assert "autumn_av1" in state.autumn_uploads
+    assert state.autumn_uploads["autumn_av1"] == "user1"
+    # Avatar is immediately referenced (avatars are always used via masquerade)
+    assert "autumn_av1" in state.referenced_autumn_ids

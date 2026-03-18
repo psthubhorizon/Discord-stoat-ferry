@@ -77,6 +77,12 @@ def generate_report(
         },
     }
 
+    # Orphan upload tracking
+    orphaned_ids = [aid for aid in state.autumn_uploads if aid not in state.referenced_autumn_ids]
+    report["orphaned_uploads"] = len(orphaned_ids)
+    if orphaned_ids:
+        report["orphaned_ids"] = orphaned_ids
+
     # Build post-migration checklist
     discord_meta = load_discord_metadata(config.output_dir)
     checklist = _build_checklist(

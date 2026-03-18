@@ -440,6 +440,7 @@ async def _process_message(
         )
         stoat_msg_id: str = result["_id"]
         state.message_map[msg.id] = stoat_msg_id
+        state.referenced_autumn_ids.update(autumn_ids)
 
         if msg.is_pinned:
             state.pending_pins.append((stoat_channel_id, stoat_msg_id))
@@ -636,6 +637,7 @@ async def _upload_attachments(
             )
             autumn_ids.append(autumn_id)
             state.attachments_uploaded += 1
+            state.autumn_uploads[autumn_id] = att.id
         except Exception as exc:  # noqa: BLE001
             state.attachments_skipped += 1
             state.warnings.append(
