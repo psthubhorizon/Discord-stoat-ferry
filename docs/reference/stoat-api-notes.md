@@ -40,6 +40,41 @@ sustained bursts.
 
 ---
 
+## Retry & Circuit Breaker
+
+*Added in v1.7.0.*
+
+All Stoat API requests go through `_api_request()` in `migrator/api.py`, which provides
+automatic retry with exponential backoff and a circuit breaker for sustained failures.
+
+### Exponential Backoff
+
+On 5xx responses or network errors, `_api_request()` retries with a delay of
+`min(2^attempt, 60) + jitter` seconds (capped at 60 seconds). This replaces the previous
+fixed 2-second delay from earlier versions.
+
+### Circuit Breaker
+
+After **5 consecutive non-429 failures**, the client logs a warning and pauses for
+**30 seconds** before retrying. The consecutive failure counter resets to 0 on any
+successful request. This prevents Ferry from hammering a server that is persistently
+unhealthy.
+
+### 429 Handling
+
+429 (Too Many Requests) responses are handled separately — the client sleeps for the
+server-provided `retry_after` value and retries. **429 responses do NOT count toward
+the circuit breaker threshold**, since they indicate normal rate limiting rather than
+server-side failure.
+
+### Concurrency Limit
+
+An `asyncio.Semaphore(max_concurrent_requests)` bounds the number of in-flight API
+requests. The default is 5, configurable via `FerryConfig.max_concurrent_requests`
+(clamped to a minimum of 1).
+
+---
+
 ## British Spelling
 
 The Stoat API uses British English in several field names. Using American spelling silently produces
