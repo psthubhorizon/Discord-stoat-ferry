@@ -5,6 +5,7 @@ from pathlib import Path
 
 from discord_ferry.parser.dce_parser import (
     _infer_thread_info,
+    check_cdn_url_expiry,
     parse_export_directory,
     parse_single_export,
     validate_export,
@@ -495,3 +496,100 @@ def test_validate_counts_emoji_from_content(tmp_path: Path) -> None:
     warnings = validate_export(exports, temp_dir)
     emoji_warnings = [w for w in warnings if w["type"] == "emoji_limit"]
     assert len(emoji_warnings) == 0  # 2 emoji < 100 limit
+
+
+# ---------------------------------------------------------------------------
+# Task 7: check_cdn_url_expiry
+# ---------------------------------------------------------------------------
+
+
+def test_cdn_url_expired() -> None:
+    """URL with past ex timestamp returns True."""
+    url = "https://cdn.discordapp.com/attachments/1/2/f.png?ex=60000000&is=abc&hm=def"
+    assert check_cdn_url_expiry(url) is True
+
+
+def test_cdn_url_valid_future() -> None:
+    """URL with far-future ex timestamp returns False."""
+    url = "https://cdn.discordapp.com/attachments/1/2/f.png?ex=ffffffff&is=abc&hm=def"
+    assert check_cdn_url_expiry(url) is False
+
+
+def test_cdn_url_no_ex_param() -> None:
+    """Discord URL without ex param returns None."""
+    url = "https://cdn.discordapp.com/attachments/1/2/file.png"
+    assert check_cdn_url_expiry(url) is None
+
+
+def test_cdn_url_non_discord() -> None:
+    """Non-Discord URL returns None."""
+    assert check_cdn_url_expiry("https://example.com/file.png") is None
+
+
+def test_cdn_url_non_hex_ex() -> None:
+    """Non-hex ex value returns None (no crash)."""
+    url = "https://cdn.discordapp.com/file.png?ex=notahex"
+    assert check_cdn_url_expiry(url) is None
+
+
+def test_cdn_url_empty_string() -> None:
+    """Empty URL returns None."""
+    assert check_cdn_url_expiry("") is None
+
+
+# ---------------------------------------------------------------------------
+# Task 8: validate_export CDN expiry warning
+# ---------------------------------------------------------------------------
+
+
+def test_validate_export_counts_expired_urls(tmp_path: Path) -> None:
+    """validate_export emits expired_cdn_url warning with count."""
+    export_data = {
+        "guild": {"id": "g1", "name": "G", "iconUrl": ""},
+        "channel": {"id": "c1", "name": "ch", "type": 0},
+        "dateRange": {"after": None, "before": None},
+        "exportedAt": "2024-01-01T00:00:00+00:00",
+        "messageCount": 1,
+        "messages": [
+            {
+                "id": "m1",
+                "type": "Default",
+                "timestamp": "2024-01-01T00:00:00+00:00",
+                "content": "msg",
+                "author": {
+                    "id": "u1",
+                    "name": "U",
+                    "discriminator": "0",
+                    "isBot": False,
+                },
+                "attachments": [
+                    {
+                        "id": "a1",
+                        "url": "https://cdn.discordapp.com/f1.png?ex=60000000",
+                        "fileName": "f1.png",
+                        "fileSizeBytes": 100,
+                    },
+                    {
+                        "id": "a2",
+                        "url": "https://cdn.discordapp.com/f2.png?ex=60000000",
+                        "fileName": "f2.png",
+                        "fileSizeBytes": 200,
+                    },
+                ],
+                "embeds": [],
+                "stickers": [],
+                "reactions": [],
+                "mentions": [],
+            }
+        ],
+    }
+    json_path = tmp_path / "Test Server - ch [c1].json"
+    json_path.write_text(json.dumps(export_data))
+
+    exports = parse_export_directory(tmp_path)
+    warnings = validate_export(exports, tmp_path)
+
+    expired_warnings = [w for w in warnings if w["type"] == "expired_cdn_url"]
+    assert len(expired_warnings) == 1
+    assert "2" in expired_warnings[0]["message"]
+    assert "--media" in expired_warnings[0]["message"]
