@@ -33,6 +33,12 @@ class FerryConfig:
     verbose: bool = False
     max_channels: int = 200
     max_emoji: int = 100
+    checkpoint_interval: int = 50
+    skip_avatars: bool = False
+    reaction_mode: str = "text"
+    min_thread_messages: int = 0
+    validate_after: bool = False
+    max_concurrent_requests: int = 5
 
     # Discord credentials (orchestrated mode only — never persisted to disk)
     discord_token: str | None = field(default=None, repr=False)

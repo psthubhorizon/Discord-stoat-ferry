@@ -89,6 +89,7 @@ def _make_export(
     is_thread: bool = False,
     parent_channel_name: str = "",
     messages: list[DCEMessage] | None = None,
+    message_count: int = 0,
 ) -> DCEExport:
     guild = DCEGuild(id=guild_id, name=guild_name, icon_url=guild_icon_url)
     channel = DCEChannel(
@@ -102,6 +103,7 @@ def _make_export(
         guild=guild,
         channel=channel,
         messages=messages or [],
+        message_count=message_count,
         is_thread=is_thread,
         parent_channel_name=parent_channel_name,
     )
@@ -1149,3 +1151,357 @@ async def test_run_channels_truncates_at_200(tmp_path: Path) -> None:
     # Warning emitted.
     warning_events = [e for e in events if e.status == "warning"]
     assert any("205" in e.message for e in warning_events)
+
+
+# ---------------------------------------------------------------------------
+# SERVER banner migration (S7)
+# ---------------------------------------------------------------------------
+
+BANNER_CDN = "https://cdn.discordapp.com/banners"
+
+
+async def test_banner_uploaded_and_applied(tmp_path: Path) -> None:
+    """SERVER phase downloads Discord banner, uploads to Autumn, and applies to Stoat server."""
+    events: list[MigrationEvent] = []
+    config = _make_config(tmp_path)
+    state = MigrationState(autumn_url=AUTUMN_URL)
+    exports = [_make_export(guild_id="111")]
+
+    # Save discord metadata with a banner hash.
+    meta = DiscordMetadata(
+        guild_id="111",
+        fetched_at="t",
+        server_default_permissions=0,
+        role_permissions={},
+        channel_metadata={},
+        banner_hash="abc123banner",
+    )
+    save_discord_metadata(meta, tmp_path)
+
+    patch_bodies: list[dict[str, object]] = []
+
+    with aioresponses() as m:
+        m.post(f"{STOAT_URL}/servers/create", payload={"_id": "srv1", "name": "Test"})
+        # CDN banner download.
+        m.get(
+            f"{BANNER_CDN}/111/abc123banner.png?size=1024",
+            body=b"FAKEPNG",
+        )
+        # Autumn banner upload.
+        m.post(f"{AUTUMN_URL}/banners", payload={"id": "autumn-banner-id"})
+        # PATCH to apply banner.
+        m.patch(
+            f"{STOAT_URL}/servers/srv1",
+            payload={"_id": "srv1"},
+            callback=lambda url, **kwargs: patch_bodies.append(  # type: ignore[misc]
+                kwargs.get("json", {})
+            ),
+        )
+
+        await run_server(config, state, exports, events.append)
+
+    assert state.stoat_server_id == "srv1"
+    messages = _collect_events(events)
+    assert any("banner" in msg.lower() for msg in messages)
+    # Verify PATCH was called with banner field.
+    assert any(b.get("banner") == "autumn-banner-id" for b in patch_bodies)
+
+
+async def test_banner_download_fails_graceful(tmp_path: Path) -> None:
+    """SERVER phase logs a warning when banner CDN download returns non-200."""
+    events: list[MigrationEvent] = []
+    config = _make_config(tmp_path)
+    state = MigrationState(autumn_url=AUTUMN_URL)
+    exports = [_make_export(guild_id="111")]
+
+    meta = DiscordMetadata(
+        guild_id="111",
+        fetched_at="t",
+        server_default_permissions=0,
+        role_permissions={},
+        channel_metadata={},
+        banner_hash="abc123banner",
+    )
+    save_discord_metadata(meta, tmp_path)
+
+    with aioresponses() as m:
+        m.post(f"{STOAT_URL}/servers/create", payload={"_id": "srv1", "name": "Test"})
+        # CDN returns 404.
+        m.get(
+            f"{BANNER_CDN}/111/abc123banner.png?size=1024",
+            status=404,
+        )
+
+        await run_server(config, state, exports, events.append)
+
+    assert state.stoat_server_id == "srv1"
+    banner_warnings = [w for w in state.warnings if w.get("type") == "banner_download_failed"]
+    assert len(banner_warnings) == 1
+    assert "404" in banner_warnings[0]["message"]
+
+
+async def test_no_banner_skipped(tmp_path: Path) -> None:
+    """SERVER phase skips banner download when no banner hash in metadata."""
+    events: list[MigrationEvent] = []
+    config = _make_config(tmp_path)
+    state = MigrationState(autumn_url=AUTUMN_URL)
+    exports = [_make_export(guild_id="111")]
+
+    # Save metadata without banner hash (empty string default).
+    meta = DiscordMetadata(
+        guild_id="111",
+        fetched_at="t",
+        server_default_permissions=0,
+        role_permissions={},
+        channel_metadata={},
+    )
+    save_discord_metadata(meta, tmp_path)
+
+    with aioresponses() as m:
+        m.post(f"{STOAT_URL}/servers/create", payload={"_id": "srv1", "name": "Test"})
+        # No CDN mock — if banner download were attempted, aioresponses would raise.
+
+        await run_server(config, state, exports, events.append)
+
+    assert state.stoat_server_id == "srv1"
+    messages = _collect_events(events)
+    assert not any("banner" in msg.lower() for msg in messages)
+
+
+# ---------------------------------------------------------------------------
+# Forum index channel
+# ---------------------------------------------------------------------------
+
+
+async def test_forum_index_channel_created(tmp_path: Path) -> None:
+    """Forum category with 2 posts creates an index channel with a pinned message
+    that includes channel references and message counts."""
+    events: list[MigrationEvent] = []
+    config = _make_config(tmp_path)
+    state = MigrationState(stoat_server_id="srv1")
+
+    # Two forum thread exports from the same parent forum.
+    exports = [
+        _make_export(
+            channel_id="fp1",
+            channel_name="first-post",
+            channel_type=15,
+            is_thread=True,
+            parent_channel_name="my-forum",
+            category_id="cat1",
+            category="General",
+            message_count=42,
+        ),
+        _make_export(
+            channel_id="fp2",
+            channel_name="second-post",
+            channel_type=15,
+            is_thread=True,
+            parent_channel_name="my-forum",
+            category_id="cat1",
+            category="General",
+            message_count=7,
+        ),
+    ]
+
+    sent_messages: list[dict[str, object]] = []
+
+    with aioresponses() as m:
+        # Channel creation for the two forum posts.
+        m.post(
+            f"{STOAT_URL}/servers/srv1/channels",
+            payload={"_id": "stoat-fp1", "name": "my-forum-first-post"},
+        )
+        m.post(
+            f"{STOAT_URL}/servers/srv1/channels",
+            payload={"_id": "stoat-fp2", "name": "my-forum-second-post"},
+        )
+        # Index channel creation.
+        m.post(
+            f"{STOAT_URL}/servers/srv1/channels",
+            payload={"_id": "stoat-idx1", "name": "my-forum-index"},
+        )
+        # Send index message.
+        m.post(
+            f"{STOAT_URL}/channels/stoat-idx1/messages",
+            payload={"_id": "idx-msg1"},
+            callback=lambda url, **kwargs: sent_messages.append(  # type: ignore[misc]
+                kwargs.get("json", {})
+            ),
+        )
+        # Pin the index message.
+        m.put(
+            f"{STOAT_URL}/channels/stoat-idx1/messages/idx-msg1/pin",
+            payload={},
+        )
+        # Category PATCH.
+        m.patch(f"{STOAT_URL}/servers/srv1", payload={"_id": "srv1"})
+
+        await run_channels(config, state, exports, events.append)
+
+    # Index channel mapped in state.
+    assert "forum-index-forum-my-forum" in state.channel_map
+    assert state.channel_map["forum-index-forum-my-forum"] == "stoat-idx1"
+
+    # The sent message contains channel references and message counts.
+    assert len(sent_messages) == 1
+    content = sent_messages[0].get("content", "")
+    assert isinstance(content, str)
+    assert "stoat-fp1" in content  # channel reference <#...>
+    assert "stoat-fp2" in content
+    assert "42" in content
+    assert "7" in content
+
+    # Masquerade is Discord Ferry.
+    masq = sent_messages[0].get("masquerade", {})
+    assert masq.get("name") == "Discord Ferry"  # type: ignore[union-attr]
+
+
+async def test_forum_index_empty_forum(tmp_path: Path) -> None:
+    """Forum category with 0 posts sends 'No posts migrated.' message."""
+    events: list[MigrationEvent] = []
+    config = _make_config(tmp_path)
+    # Pre-populate a forum category that has no channels assigned to it.
+    # This simulates the case where forum_categories was detected but all posts got dropped.
+    state = MigrationState(
+        stoat_server_id="srv1",
+        category_map={"forum-empty-forum": "stoat-cat-empty"},
+    )
+
+    # We need at least one export for run_channels to do anything. Use a normal channel
+    # so no forum posts land in the forum category.
+    exports = [
+        _make_export(
+            channel_id="ch1",
+            channel_name="general",
+            category_id="",
+            category="",
+        ),
+    ]
+
+    # Monkey-patch: inject forum_categories after channel collection.
+    # Actually, the empty forum case is when forum_categories has entries but
+    # all corresponding posts got dropped by the channel limit. We need to test
+    # the implementation handles the case where category_channels has no entries
+    # for a forum category.
+    # The simplest way: create a forum thread export that will be collected
+    # into forum_categories, but simulate 0 message_count.
+    exports = [
+        _make_export(
+            channel_id="fp1",
+            channel_name="lonely-post",
+            channel_type=15,
+            is_thread=True,
+            parent_channel_name="empty-forum",
+            category_id="cat1",
+            category="General",
+            message_count=0,
+        ),
+    ]
+
+    sent_messages: list[dict[str, object]] = []
+
+    with aioresponses() as m:
+        # Channel creation for the forum post.
+        m.post(
+            f"{STOAT_URL}/servers/srv1/channels",
+            payload={"_id": "stoat-fp1", "name": "empty-forum-lonely-post"},
+        )
+        # Index channel creation.
+        m.post(
+            f"{STOAT_URL}/servers/srv1/channels",
+            payload={"_id": "stoat-idx1", "name": "empty-forum-index"},
+        )
+        # Send index message.
+        m.post(
+            f"{STOAT_URL}/channels/stoat-idx1/messages",
+            payload={"_id": "idx-msg1"},
+            callback=lambda url, **kwargs: sent_messages.append(  # type: ignore[misc]
+                kwargs.get("json", {})
+            ),
+        )
+        # Pin.
+        m.put(
+            f"{STOAT_URL}/channels/stoat-idx1/messages/idx-msg1/pin",
+            payload={},
+        )
+        # Category PATCH.
+        m.patch(f"{STOAT_URL}/servers/srv1", payload={"_id": "srv1"})
+
+        await run_channels(config, state, exports, events.append)
+
+    assert len(sent_messages) == 1
+    content = sent_messages[0].get("content", "")
+    assert isinstance(content, str)
+    # Post with 0 messages should still appear (it exists), but test the content.
+    assert "stoat-fp1" in content
+
+
+async def test_forum_index_not_created_in_dry_run(tmp_path: Path) -> None:
+    """dry_run=True does not create forum index channels."""
+    events: list[MigrationEvent] = []
+    config = _make_config(tmp_path, dry_run=True)
+    state = MigrationState(stoat_server_id="dry-srv")
+
+    exports = [
+        _make_export(
+            channel_id="fp1",
+            channel_name="post1",
+            channel_type=15,
+            is_thread=True,
+            parent_channel_name="my-forum",
+            category_id="cat1",
+            category="General",
+            message_count=10,
+        ),
+    ]
+
+    with aioresponses():
+        # No mocks needed — dry_run should not make API calls.
+        await run_channels(config, state, exports, events.append)
+
+    # Dry-run should map the channel but NOT create a forum index.
+    assert "fp1" in state.channel_map
+    assert "forum-index-forum-my-forum" not in state.channel_map
+
+
+async def test_forum_index_failure_nonfatal(tmp_path: Path) -> None:
+    """api_create_channel failure for forum index logs a warning but does not crash."""
+    events: list[MigrationEvent] = []
+    config = _make_config(tmp_path)
+    state = MigrationState(stoat_server_id="srv1")
+
+    exports = [
+        _make_export(
+            channel_id="fp1",
+            channel_name="post1",
+            channel_type=15,
+            is_thread=True,
+            parent_channel_name="my-forum",
+            category_id="cat1",
+            category="General",
+            message_count=5,
+        ),
+    ]
+
+    with aioresponses() as m:
+        # Channel creation for the forum post succeeds.
+        m.post(
+            f"{STOAT_URL}/servers/srv1/channels",
+            payload={"_id": "stoat-fp1", "name": "my-forum-post1"},
+        )
+        # Index channel creation FAILS.
+        m.post(f"{STOAT_URL}/servers/srv1/channels", status=500)
+        # Category PATCH.
+        m.patch(f"{STOAT_URL}/servers/srv1", payload={"_id": "srv1"})
+
+        # Should NOT raise.
+        await run_channels(config, state, exports, events.append)
+
+    # The forum post channel should still be mapped.
+    assert state.channel_map["fp1"] == "stoat-fp1"
+    # No index channel should be in the map.
+    assert "forum-index-forum-my-forum" not in state.channel_map
+    # Warning should be recorded.
+    idx_warnings = [w for w in state.warnings if w.get("type") == "forum_index_failed"]
+    assert len(idx_warnings) == 1

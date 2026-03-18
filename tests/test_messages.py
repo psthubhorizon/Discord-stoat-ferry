@@ -14,6 +14,8 @@ from discord_ferry.migrator.messages import (
     _build_content,
     _build_masquerade,
     _resolve_attachment_path,
+    _skip_attachment,
+    _upload_attachments,
     run_messages,
 )
 from discord_ferry.parser.models import (
@@ -27,7 +29,7 @@ from discord_ferry.parser.models import (
     DCEReaction,
     DCEReference,
 )
-from discord_ferry.state import MigrationState
+from discord_ferry.state import FailedMessage, MigrationState
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -719,7 +721,7 @@ async def test_custom_emoji_reaction_queued(tmp_path: Path, mock_aiohttp: aiores
     mock_aiohttp.post(CHANNEL_MSG_URL, payload={"_id": "stoat_msg"})
 
     state = _make_state(emoji_map={"discord_emoji_1": "stoat_emoji_1"})
-    config = _make_config(tmp_path)
+    config = _make_config(tmp_path, reaction_mode="native")
     reaction = DCEReaction(emoji=DCEEmoji(id="discord_emoji_1", name="smile"), count=3)
     msg = _make_message(id="msg1", content="reacted", reactions=[reaction])
     export = _make_export(messages=[msg])
@@ -737,7 +739,7 @@ async def test_custom_emoji_not_in_map_not_queued(
     mock_aiohttp.post(CHANNEL_MSG_URL, payload={"_id": "stoat_msg"})
 
     state = _make_state(emoji_map={})
-    config = _make_config(tmp_path)
+    config = _make_config(tmp_path, reaction_mode="native")
     reaction = DCEReaction(emoji=DCEEmoji(id="unknown_emoji", name="mystery"), count=1)
     msg = _make_message(id="msg1", content="reacted", reactions=[reaction])
     export = _make_export(messages=[msg])
@@ -752,7 +754,7 @@ async def test_unicode_emoji_reaction_queued(tmp_path: Path, mock_aiohttp: aiore
     mock_aiohttp.post(CHANNEL_MSG_URL, payload={"_id": "stoat_msg"})
 
     state = _make_state()
-    config = _make_config(tmp_path)
+    config = _make_config(tmp_path, reaction_mode="native")
     reaction = DCEReaction(emoji=DCEEmoji(id="", name="👍"), count=5)
     msg = _make_message(id="msg1", content="thumbs up", reactions=[reaction])
     export = _make_export(messages=[msg])
@@ -901,7 +903,7 @@ async def test_run_messages_e2e(tmp_path: Path, mock_aiohttp: aioresponses) -> N
         channel_map={"ch1": "stoat_ch1"},
         emoji_map={"emoji1": "stoat_emoji1"},
     )
-    config = _make_config(tmp_path)
+    config = _make_config(tmp_path, reaction_mode="native")
 
     reaction = DCEReaction(emoji=DCEEmoji(id="emoji1", name="fire"), count=2)
     msg1 = _make_message(
@@ -1300,3 +1302,727 @@ async def test_poll_in_build_content(tmp_path: Path, mock_aiohttp: aioresponses)
     # At least one sent message should contain poll text
     poll_found = any("What do you prefer?" in str(b.get("content", "")) for b in captured_bodies)
     assert poll_found, f"Poll text not found in sent messages: {captured_bodies}"
+
+
+# ---------------------------------------------------------------------------
+# _skip_attachment helper
+# ---------------------------------------------------------------------------
+
+
+def test_skip_attachment_returns_placeholder() -> None:
+    """_skip_attachment returns a bracketed placeholder with the reason."""
+    state = _make_state()
+    reason = "File too large: photo.png (25.0 MB, limit: 20.0 MB)"
+    result = _skip_attachment(state, "photo.png", reason)
+    assert result == f"[{reason}]"
+    assert state.attachments_skipped == 1
+    assert len(state.warnings) == 1
+    assert state.warnings[0]["type"] == "attachment_skipped"
+
+
+def test_skip_attachment_increments_on_multiple_calls() -> None:
+    """Counter increments correctly across multiple calls."""
+    state = _make_state()
+    _skip_attachment(state, "a.png", "reason a")
+    _skip_attachment(state, "b.png", "reason b")
+    _skip_attachment(state, "c.png", "reason c")
+    assert state.attachments_skipped == 3
+    assert len(state.warnings) == 3
+
+
+# ---------------------------------------------------------------------------
+# Size pre-check in _upload_attachments
+# ---------------------------------------------------------------------------
+
+
+async def test_oversized_attachment_skipped_before_upload(
+    tmp_path: Path, mock_aiohttp: aioresponses
+) -> None:
+    """Attachment exceeding 20 MB limit is skipped with no HTTP call."""
+    state = _make_state()
+    config = _make_config(tmp_path)
+    events: list[MigrationEvent] = []
+
+    oversized = DCEAttachment(
+        id="att1",
+        url="huge.bin",
+        file_name="huge.bin",
+        file_size_bytes=25 * 1024 * 1024,  # 25 MB — over 20 MB limit
+    )
+    msg = _make_message(id="msg1", content="with attachment", attachments=[oversized])
+
+    async with aiohttp.ClientSession() as session:
+        result_ids, result_placeholders = await _upload_attachments(
+            msg, config, state, session, _collect_events(events)
+        )
+
+    assert result_ids == []
+    assert len(result_placeholders) >= 1
+    assert state.attachments_skipped == 1
+    assert any(w["type"] == "attachment_skipped" for w in state.warnings)
+    warning_events = [e for e in events if e.status == "warning"]
+    assert any("too large" in e.message for e in warning_events)
+
+
+async def test_file_size_zero_falls_through_to_upload(
+    tmp_path: Path, mock_aiohttp: aioresponses
+) -> None:
+    """file_size_bytes=0 (unknown size) falls through to normal upload path."""
+    att_file = tmp_path / "unknown_size.png"
+    att_file.write_bytes(b"data")
+
+    mock_aiohttp.post(f"{AUTUMN_URL}/attachments", payload={"id": "autumn_id"})
+
+    state = _make_state()
+    config = _make_config(tmp_path)
+    events: list[MigrationEvent] = []
+
+    att = DCEAttachment(
+        id="att1",
+        url="unknown_size.png",
+        file_name="unknown_size.png",
+        file_size_bytes=0,
+    )
+    msg = _make_message(id="msg1", content="with file", attachments=[att])
+
+    async with aiohttp.ClientSession() as session:
+        result_ids, _result_placeholders = await _upload_attachments(
+            msg, config, state, session, _collect_events(events)
+        )
+
+    assert len(result_ids) == 1
+    assert state.attachments_uploaded == 1
+    assert state.attachments_skipped == 0
+
+
+async def test_attachment_exactly_at_limit_proceeds(
+    tmp_path: Path, mock_aiohttp: aioresponses
+) -> None:
+    """Attachment exactly at 20 MB limit proceeds to upload (> not >=)."""
+    att_file = tmp_path / "exact.bin"
+    att_file.write_bytes(b"data")
+
+    mock_aiohttp.post(f"{AUTUMN_URL}/attachments", payload={"id": "autumn_exact"})
+
+    state = _make_state()
+    config = _make_config(tmp_path)
+    events: list[MigrationEvent] = []
+
+    att = DCEAttachment(
+        id="att1",
+        url="exact.bin",
+        file_name="exact.bin",
+        file_size_bytes=20 * 1024 * 1024,  # Exactly at limit
+    )
+    msg = _make_message(id="msg1", content="exact limit", attachments=[att])
+
+    async with aiohttp.ClientSession() as session:
+        result_ids, _result_ph = await _upload_attachments(
+            msg, config, state, session, _collect_events(events)
+        )
+
+    assert len(result_ids) == 1
+    assert state.attachments_uploaded == 1
+    assert state.attachments_skipped == 0
+
+
+# ---------------------------------------------------------------------------
+# CDN expiry check in _upload_attachments
+# ---------------------------------------------------------------------------
+
+
+async def test_expired_url_no_local_file_produces_placeholder(tmp_path: Path) -> None:
+    """Expired CDN URL + no local file -> specific expired warning via _skip_attachment."""
+    config = _make_config(tmp_path)
+    state = _make_state()
+    msg = DCEMessage(
+        id="msg1",
+        type="Default",
+        timestamp="2024-01-01T00:00:00Z",
+        content="",
+        author=DCEAuthor(id="u1", name="User"),
+        attachments=[
+            DCEAttachment(
+                id="att1",
+                url="https://cdn.discordapp.com/f.png?ex=60000000",
+                file_name="photo.png",
+                file_size_bytes=100,
+            )
+        ],
+    )
+    async with aiohttp.ClientSession() as session:
+        autumn_ids, _placeholders = await _upload_attachments(
+            msg, config, state, session, lambda e: None
+        )
+    assert autumn_ids == []
+    assert state.attachments_skipped >= 1
+    assert any(
+        w.get("type") == "attachment_skipped" and "expired" in w.get("message", "").lower()
+        for w in state.warnings
+    )
+
+
+async def test_missing_local_non_expired_url_uses_generic_warning(tmp_path: Path) -> None:
+    """Missing local file + non-expired URL -> generic missing_media warning."""
+    config = _make_config(tmp_path)
+    state = _make_state()
+    msg = DCEMessage(
+        id="msg1",
+        type="Default",
+        timestamp="2024-01-01T00:00:00Z",
+        content="",
+        author=DCEAuthor(id="u1", name="User"),
+        attachments=[
+            DCEAttachment(
+                id="att1",
+                url="https://cdn.discordapp.com/f.png?ex=ffffffff",
+                file_name="photo.png",
+                file_size_bytes=100,
+            )
+        ],
+    )
+    async with aiohttp.ClientSession() as session:
+        autumn_ids, _placeholders = await _upload_attachments(
+            msg, config, state, session, lambda e: None
+        )
+    assert autumn_ids == []
+    assert any(w.get("type") == "missing_media" for w in state.warnings)
+
+
+async def test_empty_url_attachment_no_crash(tmp_path: Path) -> None:
+    """Empty URL attachment doesn't crash CDN check (returns None)."""
+    config = _make_config(tmp_path)
+    state = _make_state()
+    msg = DCEMessage(
+        id="msg1",
+        type="Default",
+        timestamp="2024-01-01T00:00:00Z",
+        content="",
+        author=DCEAuthor(id="u1", name="User"),
+        attachments=[DCEAttachment(id="att1", url="", file_name="ghost.txt", file_size_bytes=0)],
+    )
+    async with aiohttp.ClientSession() as session:
+        autumn_ids, _placeholders = await _upload_attachments(
+            msg, config, state, session, lambda e: None
+        )
+    assert autumn_ids == []
+    # Should use generic missing_media, not crash on CDN check
+    assert any(w.get("type") == "missing_media" for w in state.warnings)
+
+
+# ---------------------------------------------------------------------------
+# Configurable checkpoint interval + time throttle (S5)
+# ---------------------------------------------------------------------------
+
+
+async def test_checkpoint_interval_zero_clamped(tmp_path: Path, mock_aiohttp: aioresponses) -> None:
+    """checkpoint_interval=0 does not cause ZeroDivisionError."""
+    mock_aiohttp.post(CHANNEL_MSG_URL, payload={"_id": "stoat_msg1"})
+    mock_aiohttp.post(CHANNEL_MSG_URL, payload={"_id": "stoat_msg2"})
+    mock_aiohttp.post(CHANNEL_MSG_URL, payload={"_id": "stoat_msg3"})
+    mock_aiohttp.post(CHANNEL_MSG_URL, payload={"_id": "stoat_msg4"})
+    mock_aiohttp.post(CHANNEL_MSG_URL, payload={"_id": "stoat_msg5"})
+
+    state = _make_state()
+    config = _make_config(tmp_path, checkpoint_interval=0)
+
+    msgs = [
+        _make_message(
+            id=f"msg{i}",
+            content=f"hello {i}",
+            timestamp=f"2024-01-15T12:{i:02d}:00+00:00",
+        )
+        for i in range(5)
+    ]
+    export = _make_export(messages=msgs)
+
+    # Should NOT raise ZeroDivisionError
+    await run_messages(config, state, [export], lambda e: None)
+
+    assert len(state.message_map) == 5
+
+
+async def test_checkpoint_saves_are_time_throttled(
+    tmp_path: Path, mock_aiohttp: aioresponses
+) -> None:
+    """save_state during message loop is only called when 5s have elapsed."""
+    # Create enough messages to trigger multiple checkpoint intervals
+    num_msgs = 10
+    for _ in range(num_msgs):
+        mock_aiohttp.post(CHANNEL_MSG_URL, payload={"_id": "stoat_msg"})
+
+    state = _make_state()
+    config = _make_config(tmp_path, checkpoint_interval=3)
+
+    msgs = [
+        _make_message(
+            id=f"msg{i}",
+            content=f"hello {i}",
+            timestamp=f"2024-01-15T12:{i:02d}:00+00:00",
+        )
+        for i in range(num_msgs)
+    ]
+    export = _make_export(messages=msgs)
+
+    save_calls: list[object] = []
+
+    def counting_save(st: object, path: object) -> None:
+        save_calls.append(1)
+
+    # Patch save_state in messages module to count calls.
+    # Time passes near-instantly in test, so the 5s throttle means
+    # in-loop saves should be suppressed. Only channel-end save fires.
+    with patch("discord_ferry.migrator.messages.save_state", counting_save):
+        await run_messages(config, state, [export], lambda e: None)
+
+    # At checkpoint_interval=3, indices 2,5,8 hit the modulo check (3 times).
+    # But the 5s time throttle suppresses all in-loop saves because the test
+    # runs in <1ms. Only the channel-end unconditional save should fire (1 call).
+    assert save_calls == [1], (
+        f"Expected only the channel-end save (1 call), got {len(save_calls)} calls"
+    )
+
+
+async def test_checkpoint_interval_from_config(tmp_path: Path, mock_aiohttp: aioresponses) -> None:
+    """checkpoint_interval config field is respected in the modulo check."""
+    # With checkpoint_interval=2 and 4 messages, indices 1 and 3 hit modulo.
+    for _ in range(4):
+        mock_aiohttp.post(CHANNEL_MSG_URL, payload={"_id": "stoat_msg"})
+
+    state = _make_state()
+    config = _make_config(tmp_path, checkpoint_interval=2)
+
+    msgs = [
+        _make_message(
+            id=f"msg{i}",
+            content=f"hello {i}",
+            timestamp=f"2024-01-15T12:{i:02d}:00+00:00",
+        )
+        for i in range(4)
+    ]
+    export = _make_export(messages=msgs)
+    events: list[MigrationEvent] = []
+
+    await run_messages(config, state, [export], _collect_events(events))
+
+    # Progress events at checkpoints: idx 1 (msg 2/4) and idx 3 (msg 4/4).
+    progress_with_current = [
+        e for e in events if e.status == "progress" and e.current is not None and e.current > 0
+    ]
+    checkpoint_counts = [e.current for e in progress_with_current]
+    assert 2 in checkpoint_counts, f"Expected checkpoint at message 2, got {checkpoint_counts}"
+    assert 4 in checkpoint_counts, f"Expected checkpoint at message 4, got {checkpoint_counts}"
+
+
+# ---------------------------------------------------------------------------
+# Orphan upload tracking (S5)
+# ---------------------------------------------------------------------------
+
+
+async def test_successful_send_marks_referenced(tmp_path: Path, mock_aiohttp: aioresponses) -> None:
+    """After a successful api_send_message, autumn_ids are added to referenced_autumn_ids."""
+    att_file = tmp_path / "file.png"
+    att_file.write_bytes(b"data")
+    mock_aiohttp.post(f"{AUTUMN_URL}/attachments", payload={"id": "autumn_att1"})
+    mock_aiohttp.post(CHANNEL_MSG_URL, payload={"_id": "stoat_msg1"})
+
+    state = _make_state()
+    config = _make_config(tmp_path)
+    att = DCEAttachment(id="att1", url="file.png", file_name="file.png")
+    msg = _make_message(id="msg1", content="with file", attachments=[att])
+    export = _make_export(messages=[msg])
+
+    await run_messages(config, state, [export], lambda e: None)
+
+    # The uploaded autumn_id should be tracked and referenced
+    assert "autumn_att1" in state.autumn_uploads
+    assert state.autumn_uploads["autumn_att1"] == "att1"
+    assert "autumn_att1" in state.referenced_autumn_ids
+
+
+async def test_failed_send_leaves_orphan(tmp_path: Path) -> None:
+    """When api_send_message fails, uploaded files remain in autumn_uploads but NOT referenced."""
+
+    async def always_fail(
+        session: Any, stoat_url: Any, token: Any, channel_id: Any, **kwargs: Any
+    ) -> dict[str, Any]:
+        raise RuntimeError("API down")
+
+    att_file = tmp_path / "file.png"
+    att_file.write_bytes(b"data")
+
+    state = _make_state()
+    config = _make_config(tmp_path)
+    att = DCEAttachment(id="att1", url="file.png", file_name="file.png")
+    msg = _make_message(id="msg1", content="with file", attachments=[att])
+    export = _make_export(messages=[msg])
+
+    with (
+        patch("discord_ferry.migrator.messages.api_send_message", always_fail),
+        patch(
+            "discord_ferry.migrator.messages.upload_with_cache",
+            return_value="autumn_orphan1",
+        ),
+    ):
+        await run_messages(config, state, [export], lambda e: None)
+
+    # Upload was tracked...
+    assert "autumn_orphan1" in state.autumn_uploads
+    # ...but NOT marked as referenced (send failed)
+    assert "autumn_orphan1" not in state.referenced_autumn_ids
+
+
+# ---------------------------------------------------------------------------
+# Dead-letter queue: FailedMessage on send failure (S1)
+# ---------------------------------------------------------------------------
+
+
+async def test_message_failure_creates_failed_message(tmp_path: Path) -> None:
+    """A send failure creates a FailedMessage with correct fields in state.failed_messages."""
+
+    async def always_fail(
+        session: Any, stoat_url: Any, token: Any, channel_id: Any, **kwargs: Any
+    ) -> dict[str, Any]:
+        raise RuntimeError("API down")
+
+    state = _make_state()
+    config = _make_config(tmp_path)
+    msg = _make_message(id="msg_fail", content="important message")
+    export = _make_export(messages=[msg])
+
+    with patch("discord_ferry.migrator.messages.api_send_message", always_fail):
+        await run_messages(config, state, [export], lambda e: None)
+
+    assert len(state.failed_messages) == 1
+    fm = state.failed_messages[0]
+    assert isinstance(fm, FailedMessage)
+    assert fm.discord_msg_id == "msg_fail"
+    assert fm.stoat_channel_id == "stoat_ch1"
+    assert "API down" in fm.error
+    assert fm.retry_count == 0
+
+
+async def test_failed_message_content_preview_truncated(tmp_path: Path) -> None:
+    """Content preview is truncated to 50 chars for long messages."""
+
+    async def always_fail(
+        session: Any, stoat_url: Any, token: Any, channel_id: Any, **kwargs: Any
+    ) -> dict[str, Any]:
+        raise RuntimeError("fail")
+
+    long_content = "x" * 5000
+    state = _make_state()
+    config = _make_config(tmp_path)
+    msg = _make_message(id="msg_long", content=long_content)
+    export = _make_export(messages=[msg])
+
+    with patch("discord_ferry.migrator.messages.api_send_message", always_fail):
+        await run_messages(config, state, [export], lambda e: None)
+
+    assert len(state.failed_messages) == 1
+    assert len(state.failed_messages[0].content_preview) == 50
+
+
+async def test_forwarded_message_failure_no_crash(tmp_path: Path) -> None:
+    """Forwarded messages (empty content) that fail don't crash the preview slice."""
+
+    async def always_fail(
+        session: Any, stoat_url: Any, token: Any, channel_id: Any, **kwargs: Any
+    ) -> dict[str, Any]:
+        raise RuntimeError("fail")
+
+    state = _make_state()
+    config = _make_config(tmp_path)
+    # Non-forwarded empty content message (no reference) — will proceed to send
+    msg = _make_message(
+        id="msg_empty",
+        content="",
+        attachments=[
+            DCEAttachment(id="att1", url="missing.png", file_name="missing.png"),
+        ],
+    )
+    export = _make_export(messages=[msg])
+
+    with patch("discord_ferry.migrator.messages.api_send_message", always_fail):
+        await run_messages(config, state, [export], lambda e: None)
+
+    # Should not crash — content_preview should be empty string or short
+    assert len(state.failed_messages) == 1
+    assert len(state.failed_messages[0].content_preview) <= 50
+
+
+# ---------------------------------------------------------------------------
+# Reaction mode (text / native / skip)
+# ---------------------------------------------------------------------------
+
+
+async def test_text_mode_appends_reaction_summary(
+    tmp_path: Path, mock_aiohttp: aioresponses
+) -> None:
+    """reaction_mode='text' appends [Reactions: ...] to content and does not queue."""
+    sent_kwargs: list[dict[str, Any]] = []
+
+    async def capture_send(
+        session: Any, stoat_url: Any, token: Any, channel_id: Any, **kwargs: Any
+    ) -> dict[str, Any]:
+        sent_kwargs.append(kwargs)
+        return {"_id": "stoat_msg"}
+
+    state = _make_state()
+    config = _make_config(tmp_path, reaction_mode="text")
+    reaction = DCEReaction(emoji=DCEEmoji(id="", name="thumbsup"), count=3)
+    msg = _make_message(id="msg1", content="hello", reactions=[reaction])
+    export = _make_export(messages=[msg])
+
+    with patch("discord_ferry.migrator.messages.api_send_message", capture_send):
+        await run_messages(config, state, [export], lambda e: None)
+
+    assert len(state.pending_reactions) == 0
+    assert "[Reactions:" in sent_kwargs[0]["content"]
+    assert "thumbsup 3" in sent_kwargs[0]["content"]
+
+
+async def test_native_mode_queues_reactions(tmp_path: Path, mock_aiohttp: aioresponses) -> None:
+    """reaction_mode='native' queues reactions and does not append text."""
+    sent_kwargs: list[dict[str, Any]] = []
+
+    async def capture_send(
+        session: Any, stoat_url: Any, token: Any, channel_id: Any, **kwargs: Any
+    ) -> dict[str, Any]:
+        sent_kwargs.append(kwargs)
+        return {"_id": "stoat_msg"}
+
+    state = _make_state()
+    config = _make_config(tmp_path, reaction_mode="native")
+    reaction = DCEReaction(emoji=DCEEmoji(id="", name="thumbsup"), count=3)
+    msg = _make_message(id="msg1", content="hello", reactions=[reaction])
+    export = _make_export(messages=[msg])
+
+    with patch("discord_ferry.migrator.messages.api_send_message", capture_send):
+        await run_messages(config, state, [export], lambda e: None)
+
+    assert len(state.pending_reactions) == 1
+    assert "[Reactions:" not in sent_kwargs[0]["content"]
+
+
+async def test_skip_mode_no_reactions(tmp_path: Path, mock_aiohttp: aioresponses) -> None:
+    """reaction_mode='skip' produces no reaction text and no queuing."""
+    sent_kwargs: list[dict[str, Any]] = []
+
+    async def capture_send(
+        session: Any, stoat_url: Any, token: Any, channel_id: Any, **kwargs: Any
+    ) -> dict[str, Any]:
+        sent_kwargs.append(kwargs)
+        return {"_id": "stoat_msg"}
+
+    state = _make_state()
+    config = _make_config(tmp_path, reaction_mode="skip")
+    reaction = DCEReaction(emoji=DCEEmoji(id="", name="thumbsup"), count=3)
+    msg = _make_message(id="msg1", content="hello", reactions=[reaction])
+    export = _make_export(messages=[msg])
+
+    with patch("discord_ferry.migrator.messages.api_send_message", capture_send):
+        await run_messages(config, state, [export], lambda e: None)
+
+    assert len(state.pending_reactions) == 0
+    assert "[Reactions:" not in sent_kwargs[0]["content"]
+
+
+async def test_invalid_reaction_mode_defaults_to_text(
+    tmp_path: Path, mock_aiohttp: aioresponses
+) -> None:
+    """Invalid reaction_mode value is treated as 'text' with a warning logged."""
+    sent_kwargs: list[dict[str, Any]] = []
+
+    async def capture_send(
+        session: Any, stoat_url: Any, token: Any, channel_id: Any, **kwargs: Any
+    ) -> dict[str, Any]:
+        sent_kwargs.append(kwargs)
+        return {"_id": "stoat_msg"}
+
+    state = _make_state()
+    config = _make_config(tmp_path, reaction_mode="bogus")
+    reaction = DCEReaction(emoji=DCEEmoji(id="", name="thumbsup"), count=3)
+    msg = _make_message(id="msg1", content="hello", reactions=[reaction])
+    export = _make_export(messages=[msg])
+
+    with patch("discord_ferry.migrator.messages.api_send_message", capture_send):
+        await run_messages(config, state, [export], lambda e: None)
+
+    # Should behave like text mode
+    assert len(state.pending_reactions) == 0
+    assert "[Reactions:" in sent_kwargs[0]["content"]
+    # Warning should be logged about invalid mode
+    assert any("reaction_mode" in w["message"] for w in state.warnings)
+
+
+# ---------------------------------------------------------------------------
+# S3: Edited message indicator
+# ---------------------------------------------------------------------------
+
+
+def test_edited_message_gets_indicator() -> None:
+    """Message with timestamp_edited set contains *(edited)* in built content."""
+    state = _make_state()
+    msg = _make_message(
+        content="original text",
+        timestamp="2024-01-15T12:00:00+00:00",
+        timestamp_edited="2024-01-15T13:00:00+00:00",
+    )
+    result = _build_content(msg, state)
+    assert "*(edited)*" in result
+
+
+def test_non_edited_message_no_indicator() -> None:
+    """Message without timestamp_edited does NOT contain *(edited)*."""
+    state = _make_state()
+    msg = _make_message(
+        content="original text",
+        timestamp="2024-01-15T12:00:00+00:00",
+    )
+    result = _build_content(msg, state)
+    assert "*(edited)*" not in result
+
+
+def test_empty_content_with_edit_timestamp() -> None:
+    """Empty content with edit timestamp still gets the indicator."""
+    state = _make_state()
+    msg = _make_message(
+        content="",
+        timestamp="2024-01-15T12:00:00+00:00",
+        timestamp_edited="2024-01-15T14:00:00+00:00",
+    )
+    result = _build_content(msg, state)
+    assert "*(edited)*" in result
+
+
+# ---------------------------------------------------------------------------
+# S4: Attachment overflow handling
+# ---------------------------------------------------------------------------
+
+
+async def test_five_attachments_no_overflow(tmp_path: Path, mock_aiohttp: aioresponses) -> None:
+    """5 attachments produce no overflow warning and no overflow text in content."""
+    for i in range(5):
+        f = tmp_path / f"file{i}.png"
+        f.write_bytes(b"x" * 10)
+        mock_aiohttp.post(f"{AUTUMN_URL}/attachments", payload={"id": f"att_id_{i}"})
+
+    mock_aiohttp.post(CHANNEL_MSG_URL, payload={"_id": "stoat_msg"})
+
+    state = _make_state()
+    config = _make_config(tmp_path)
+    attachments = [
+        DCEAttachment(id=str(i), url=f"file{i}.png", file_name=f"file{i}.png") for i in range(5)
+    ]
+    msg = _make_message(id="msg1", content="five files", attachments=attachments)
+    export = _make_export(messages=[msg])
+
+    sent_kwargs: list[dict[str, Any]] = []
+
+    async def capture_send(
+        session: Any, stoat_url: Any, token: Any, channel_id: Any, **kwargs: Any
+    ) -> dict[str, Any]:
+        sent_kwargs.append(kwargs)
+        return {"_id": "stoat_msg"}
+
+    with patch("discord_ferry.migrator.messages.api_send_message", capture_send):
+        await run_messages(config, state, [export], lambda e: None)
+
+    assert "msg1" in state.message_map
+    assert state.attachments_skipped == 0
+    assert "[+" not in sent_kwargs[0]["content"]
+    assert not any(w.get("type") == "attachment_overflow" for w in state.warnings)
+
+
+async def test_seven_attachments_overflow_text(tmp_path: Path, mock_aiohttp: aioresponses) -> None:
+    """7 attachments: first 5 uploaded, content includes overflow text, state updated."""
+    for i in range(5):
+        f = tmp_path / f"file{i}.png"
+        f.write_bytes(b"x" * 10)
+        mock_aiohttp.post(f"{AUTUMN_URL}/attachments", payload={"id": f"att_id_{i}"})
+
+    mock_aiohttp.post(CHANNEL_MSG_URL, payload={"_id": "stoat_msg"})
+
+    state = _make_state()
+    config = _make_config(tmp_path)
+    attachments = [
+        DCEAttachment(id=str(i), url=f"file{i}.png", file_name=f"file{i}.png") for i in range(7)
+    ]
+    msg = _make_message(id="msg1", content="many files", attachments=attachments)
+    export = _make_export(messages=[msg])
+
+    sent_kwargs: list[dict[str, Any]] = []
+
+    async def capture_send(
+        session: Any, stoat_url: Any, token: Any, channel_id: Any, **kwargs: Any
+    ) -> dict[str, Any]:
+        sent_kwargs.append(kwargs)
+        return {"_id": "stoat_msg"}
+
+    with patch("discord_ferry.migrator.messages.api_send_message", capture_send):
+        await run_messages(config, state, [export], lambda e: None)
+
+    assert "msg1" in state.message_map
+    content = sent_kwargs[0]["content"]
+    assert "[+2 more attachment(s)" in content
+    assert "file5.png" in content
+    assert "file6.png" in content
+    assert state.attachments_skipped == 2
+    assert any(w.get("type") == "attachment_overflow" for w in state.warnings)
+
+
+async def test_ten_attachments_overflow(tmp_path: Path, mock_aiohttp: aioresponses) -> None:
+    """10 attachments: 5 in overflow text."""
+    for i in range(5):
+        f = tmp_path / f"file{i}.png"
+        f.write_bytes(b"x" * 10)
+        mock_aiohttp.post(f"{AUTUMN_URL}/attachments", payload={"id": f"att_id_{i}"})
+
+    mock_aiohttp.post(CHANNEL_MSG_URL, payload={"_id": "stoat_msg"})
+
+    state = _make_state()
+    config = _make_config(tmp_path)
+    attachments = [
+        DCEAttachment(id=str(i), url=f"file{i}.png", file_name=f"file{i}.png") for i in range(10)
+    ]
+    msg = _make_message(id="msg1", content="lots of files", attachments=attachments)
+    export = _make_export(messages=[msg])
+
+    sent_kwargs: list[dict[str, Any]] = []
+
+    async def capture_send(
+        session: Any, stoat_url: Any, token: Any, channel_id: Any, **kwargs: Any
+    ) -> dict[str, Any]:
+        sent_kwargs.append(kwargs)
+        return {"_id": "stoat_msg"}
+
+    with patch("discord_ferry.migrator.messages.api_send_message", capture_send):
+        await run_messages(config, state, [export], lambda e: None)
+
+    assert "msg1" in state.message_map
+    content = sent_kwargs[0]["content"]
+    assert "[+5 more attachment(s)" in content
+    assert state.attachments_skipped == 5
+
+
+# ---------------------------------------------------------------------------
+# _build_content — Discord link rewriting (S2)
+# ---------------------------------------------------------------------------
+
+
+def test_discord_links_rewritten_in_content() -> None:
+    """Discord jump links and invite links are rewritten in _build_content pipeline."""
+    state = _make_state(
+        channel_map={"ch1": "stoat_ch1", "456": "stoat_ch_mapped"},
+    )
+    msg = _make_message(
+        content=("Check https://discord.com/channels/111/456/789 and https://discord.gg/invite1"),
+    )
+    result = _build_content(msg, state)
+    # Jump link rewritten to channel mention
+    assert "<#stoat_ch_mapped>" in result
+    # Invite annotated
+    assert "[Discord invite — no longer valid]" in result
+    # Original Discord URL should not remain for the mapped link
+    assert "discord.com/channels/111/456/789" not in result

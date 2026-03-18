@@ -1,10 +1,15 @@
 """Content transformation: markdown, mentions, emoji, spoilers, embeds."""
 
+import logging
 import re
 from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+from discord_ferry.parser.dce_parser import check_cdn_url_expiry
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Private helpers
@@ -30,6 +35,13 @@ def _transform_outside_code(content: str, transform_fn: Callable[[str], str]) ->
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
+
+_DISCORD_JUMP_LINK_RE = re.compile(
+    r"https://(canary\.|ptb\.)?discord(app)?\.com/channels/(\d+)/(\d+)(?:/(\d+))?"
+)
+_DISCORD_INVITE_RE = re.compile(
+    r"https://(discord\.gg|(canary\.|ptb\.)?discord(app)?\.com/invite)/(\w+)"
+)
 
 _SPOILER_RE = re.compile(r"\|\|(.+?)\|\|", re.DOTALL)
 _UNDERLINE_RE = re.compile(r"__([^_]+?)__")
@@ -114,6 +126,45 @@ def remap_emoji(content: str, emoji_map: dict[str, str]) -> str:
     return _transform_outside_code(content, lambda s: _EMOJI_RE.sub(replace_emoji, s))
 
 
+def rewrite_discord_links(content: str, channel_map: dict[str, str]) -> str:
+    """Rewrite Discord jump links and annotate invite links.
+
+    Args:
+        content: Raw message content.
+        channel_map: Mapping of Discord channel ID -> Stoat channel ID.
+
+    Returns:
+        Content with jump links replaced by channel mentions (or annotated)
+        and invite links annotated as no longer valid.
+    """
+
+    def _replace_jump(m: re.Match[str]) -> str:
+        channel_id = m.group(4)
+        stoat_id = channel_map.get(channel_id)
+        if stoat_id:
+            return f"<#{stoat_id}>"
+        return f"{m.group(0)} [original Discord link]"
+
+    def _replace_invite(m: re.Match[str]) -> str:
+        return f"{m.group(0)} [Discord invite \u2014 no longer valid]"
+
+    def _transform(text: str) -> str:
+        text = _DISCORD_JUMP_LINK_RE.sub(_replace_jump, text)
+        text = _DISCORD_INVITE_RE.sub(_replace_invite, text)
+        return text
+
+    return _transform_outside_code(content, _transform)
+
+
+def _flush_inline_row(row: list[tuple[str, str]], parts: list[str]) -> None:
+    names = " | ".join(f"**{name}**" for name, _ in row)
+    values = " | ".join(value for _, value in row)
+    parts.append(names)
+    if any(v for _, v in row):
+        parts.append(values)
+    row.clear()
+
+
 def flatten_embed(
     embed: dict[str, object],
     export_dir: Path | None = None,
@@ -145,15 +196,31 @@ def flatten_embed(
     if description:
         parts.append(str(description))
 
-    # Fields
+    # Fields — inline fields are grouped into pipe-separated rows (max 3 per row)
     fields = embed.get("fields")
     if isinstance(fields, list):
-        for field in fields:
-            if isinstance(field, dict):
-                fname = field.get("name", "")
-                fvalue = field.get("value", "")
-                if fname or fvalue:
-                    parts.append(f"**{fname}:** {fvalue}")
+        inline_row: list[tuple[str, str]] = []
+        for field_obj in fields:
+            if not isinstance(field_obj, dict):
+                continue
+            fname = str(field_obj.get("name", ""))
+            fvalue = str(field_obj.get("value", ""))
+            if not fname and not fvalue:
+                continue
+            is_inline = bool(field_obj.get("inline", False))
+            if is_inline:
+                inline_row.append((fname, fvalue))
+                if len(inline_row) >= 3:
+                    _flush_inline_row(inline_row, parts)
+            else:
+                if inline_row:
+                    _flush_inline_row(inline_row, parts)
+                if fvalue:
+                    parts.append(f"**{fname}**\n{fvalue}")
+                else:
+                    parts.append(f"**{fname}**")
+        if inline_row:
+            _flush_inline_row(inline_row, parts)
 
     # Footer
     footer = embed.get("footer")
@@ -200,6 +267,21 @@ def flatten_embed(
                     if candidate.exists():
                         media_path = candidate
                         break
+
+    # Check remote Discord CDN URLs for expiry (only if no local file was found).
+    if media_path is None:
+        for media_key in ("thumbnail", "image"):
+            media_obj = embed.get(media_key)
+            if isinstance(media_obj, dict):
+                media_url = media_obj.get("url", "")
+                if (
+                    isinstance(media_url, str)
+                    and media_url.startswith(("http://", "https://"))
+                    and ("cdn.discordapp.com" in media_url or "media.discordapp.net" in media_url)
+                    and check_cdn_url_expiry(media_url) is True
+                ):
+                    logger.warning("Expired embed media URL stripped: %s", media_url)
+                    break  # Don't set media_path — expired URL stripped
 
     return result, media_path
 

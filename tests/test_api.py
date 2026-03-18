@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
+import logging
+from unittest.mock import AsyncMock, patch
+
 import aiohttp
 import pytest
 from aioresponses import aioresponses
 
 from discord_ferry.errors import MigrationError
 from discord_ferry.migrator.api import (
+    _circuit_state,
+    _reset_circuit_state,
     api_add_reaction,
     api_create_channel,
     api_create_emoji,
@@ -23,6 +28,7 @@ from discord_ferry.migrator.api import (
     api_set_role_permissions,
     api_set_server_default_permissions,
     api_upsert_categories,
+    init_request_semaphore,
 )
 
 BASE_URL = "https://api.test"
@@ -32,6 +38,18 @@ TOKEN = "test-session-token"
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _clean_circuit() -> None:  # type: ignore[misc]
+    """Reset circuit breaker and semaphore state between tests."""
+    import discord_ferry.migrator.api as _api_mod
+
+    _reset_circuit_state()
+    _api_mod._request_semaphore = None
+    yield  # type: ignore[misc]
+    _reset_circuit_state()
+    _api_mod._request_semaphore = None
 
 
 @pytest.fixture
@@ -493,3 +511,174 @@ async def test_api_set_channel_default_permissions(mock_aiohttp: aioresponses) -
         await api_set_channel_default_permissions(
             session, BASE_URL, TOKEN, "ch1", allow=4194304, deny=0
         )
+
+
+# ---------------------------------------------------------------------------
+# Exponential backoff tests
+# ---------------------------------------------------------------------------
+
+
+async def test_exponential_backoff_timing(mock_aiohttp: aioresponses) -> None:
+    """5xx retries use exponential delays: ~1, ~2, then fail (3 attempts)."""
+    for _ in range(3):
+        mock_aiohttp.get(f"{BASE_URL}/servers/srv1", status=502, body="Bad Gateway")
+
+    sleep_calls: list[float] = []
+    original_sleep = AsyncMock(side_effect=lambda d: sleep_calls.append(d))
+
+    with patch("discord_ferry.migrator.api.asyncio.sleep", original_sleep):
+        async with aiohttp.ClientSession() as session:
+            with pytest.raises(MigrationError, match="API request failed after 3 retries"):
+                await api_fetch_server(session, BASE_URL, TOKEN, "srv1")
+
+    # Two sleeps (attempts 0 and 1 — attempt 2 raises immediately).
+    assert len(sleep_calls) == 2
+    # Attempt 0: 2^0 + jitter = ~1.1–1.5
+    assert 1.0 <= sleep_calls[0] <= 1.6
+    # Attempt 1: 2^1 + jitter = ~2.1–2.5
+    assert 2.0 <= sleep_calls[1] <= 2.6
+
+
+async def test_429_uses_retry_after(mock_aiohttp: aioresponses) -> None:
+    """429 uses retry_after from response body, not exponential backoff."""
+    mock_aiohttp.get(f"{BASE_URL}/servers/srv1", status=429, payload={"retry_after": 200})
+    mock_aiohttp.get(f"{BASE_URL}/servers/srv1", payload={"_id": "srv1", "name": "OK"})
+
+    sleep_calls: list[float] = []
+    original_sleep = AsyncMock(side_effect=lambda d: sleep_calls.append(d))
+
+    with patch("discord_ferry.migrator.api.asyncio.sleep", original_sleep):
+        async with aiohttp.ClientSession() as session:
+            result = await api_fetch_server(session, BASE_URL, TOKEN, "srv1")
+
+    assert result["_id"] == "srv1"
+    # Should have slept for retry_after ms converted to seconds (0.2s).
+    assert len(sleep_calls) == 1
+    assert sleep_calls[0] == pytest.approx(0.2, abs=0.01)
+
+
+# ---------------------------------------------------------------------------
+# Circuit breaker tests
+# ---------------------------------------------------------------------------
+
+
+async def test_circuit_opens_after_consecutive_failures(
+    mock_aiohttp: aioresponses, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Circuit breaker opens after _CIRCUIT_THRESHOLD consecutive failures."""
+    # Pre-load the circuit state just below threshold.
+    _circuit_state.consecutive_failures = 4
+
+    # This request will fail (502 x3), pushing failures to 5+ before next call.
+    for _ in range(3):
+        mock_aiohttp.get(f"{BASE_URL}/servers/srv1", status=502, body="Bad Gateway")
+
+    with patch("discord_ferry.migrator.api.asyncio.sleep", new_callable=AsyncMock):
+        async with aiohttp.ClientSession() as session:
+            with pytest.raises(MigrationError):
+                await api_fetch_server(session, BASE_URL, TOKEN, "srv1")
+
+    # Failures were incremented: 4 + 2 retries + 1 final = 7
+    assert _circuit_state.consecutive_failures >= 5
+
+    # Next call should trigger circuit breaker warning.
+    mock_aiohttp.get(f"{BASE_URL}/servers/srv1", payload={"_id": "srv1", "name": "OK"})
+    with (
+        patch("discord_ferry.migrator.api.asyncio.sleep", new_callable=AsyncMock),
+        caplog.at_level(logging.WARNING, logger="discord_ferry.migrator.api"),
+    ):
+        async with aiohttp.ClientSession() as session:
+            await api_fetch_server(session, BASE_URL, TOKEN, "srv1")
+
+    assert "Circuit breaker open" in caplog.text
+
+
+async def test_circuit_resets_on_success(mock_aiohttp: aioresponses) -> None:
+    """A successful request resets the circuit failure counter to zero."""
+    _circuit_state.consecutive_failures = 4
+
+    mock_aiohttp.get(f"{BASE_URL}/servers/srv1", payload={"_id": "srv1", "name": "OK"})
+    async with aiohttp.ClientSession() as session:
+        await api_fetch_server(session, BASE_URL, TOKEN, "srv1")
+
+    assert _circuit_state.consecutive_failures == 0
+
+
+async def test_429_not_counted_as_circuit_failure(mock_aiohttp: aioresponses) -> None:
+    """429 rate-limited responses do not increment circuit failure counter."""
+    mock_aiohttp.get(f"{BASE_URL}/servers/srv1", status=429, payload={"retry_after": 10})
+    mock_aiohttp.get(f"{BASE_URL}/servers/srv1", payload={"_id": "srv1", "name": "OK"})
+
+    with patch("discord_ferry.migrator.api.asyncio.sleep", new_callable=AsyncMock):
+        async with aiohttp.ClientSession() as session:
+            await api_fetch_server(session, BASE_URL, TOKEN, "srv1")
+
+    # Counter should be 0: 429 doesn't increment, success resets.
+    assert _circuit_state.consecutive_failures == 0
+
+
+# ---------------------------------------------------------------------------
+# Semaphore tests
+# ---------------------------------------------------------------------------
+
+
+async def test_semaphore_not_initialized(mock_aiohttp: aioresponses) -> None:
+    """Requests work correctly without initializing the semaphore."""
+    import discord_ferry.migrator.api as _api_mod
+
+    assert _api_mod._request_semaphore is None
+
+    mock_aiohttp.get(f"{BASE_URL}/servers/srv1", payload={"_id": "srv1", "name": "OK"})
+    async with aiohttp.ClientSession() as session:
+        result = await api_fetch_server(session, BASE_URL, TOKEN, "srv1")
+    assert result["_id"] == "srv1"
+
+
+async def test_max_concurrent_zero_clamped(mock_aiohttp: aioresponses) -> None:
+    """init_request_semaphore(0) clamps to 1 and still works."""
+    init_request_semaphore(0)
+
+    import discord_ferry.migrator.api as _api_mod
+
+    assert _api_mod._request_semaphore is not None
+    # Semaphore value should be 1 (clamped from 0)
+    assert _api_mod._request_semaphore._value == 1  # type: ignore[attr-defined]
+
+    mock_aiohttp.get(f"{BASE_URL}/servers/srv1", payload={"_id": "srv1", "name": "OK"})
+    async with aiohttp.ClientSession() as session:
+        result = await api_fetch_server(session, BASE_URL, TOKEN, "srv1")
+    assert result["_id"] == "srv1"
+
+
+async def test_semaphore_initialized_limits_concurrency(mock_aiohttp: aioresponses) -> None:
+    """When semaphore is initialized, requests flow through it."""
+    init_request_semaphore(3)
+
+    mock_aiohttp.get(f"{BASE_URL}/servers/srv1", payload={"_id": "srv1", "name": "OK"})
+    async with aiohttp.ClientSession() as session:
+        result = await api_fetch_server(session, BASE_URL, TOKEN, "srv1")
+    assert result["_id"] == "srv1"
+
+
+async def test_network_error_exponential_backoff(mock_aiohttp: aioresponses) -> None:
+    """Network errors also use exponential backoff with jitter."""
+    for _ in range(3):
+        mock_aiohttp.get(
+            f"{BASE_URL}/servers/srv1",
+            exception=aiohttp.ClientError("Connection refused"),
+        )
+
+    sleep_calls: list[float] = []
+    original_sleep = AsyncMock(side_effect=lambda d: sleep_calls.append(d))
+
+    with patch("discord_ferry.migrator.api.asyncio.sleep", original_sleep):
+        async with aiohttp.ClientSession() as session:
+            with pytest.raises(MigrationError, match="Network error after 3 retries"):
+                await api_fetch_server(session, BASE_URL, TOKEN, "srv1")
+
+    # Two sleeps (attempts 0 and 1 — attempt 2 raises immediately).
+    assert len(sleep_calls) == 2
+    # Attempt 0: 2^0 + jitter = ~1.1–1.5
+    assert 1.0 <= sleep_calls[0] <= 1.6
+    # Attempt 1: 2^1 + jitter = ~2.1–2.5
+    assert 2.0 <= sleep_calls[1] <= 2.6

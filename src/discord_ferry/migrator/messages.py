@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+import time
 from typing import TYPE_CHECKING, Any
 
 from discord_ferry.core.events import MigrationEvent
 from discord_ferry.migrator.api import api_send_message, get_session
 from discord_ferry.migrator.sanitize import truncate_name
-from discord_ferry.parser.dce_parser import stream_messages
+from discord_ferry.parser.dce_parser import check_cdn_url_expiry, stream_messages
 from discord_ferry.parser.transforms import (
     convert_spoilers,
     flatten_embed,
@@ -17,10 +19,11 @@ from discord_ferry.parser.transforms import (
     handle_stickers,
     remap_emoji,
     remap_mentions,
+    rewrite_discord_links,
     strip_underline,
 )
-from discord_ferry.state import save_state
-from discord_ferry.uploader.autumn import upload_with_cache
+from discord_ferry.state import FailedMessage, save_state
+from discord_ferry.uploader.autumn import TAG_SIZE_LIMITS, upload_with_cache
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -29,8 +32,12 @@ if TYPE_CHECKING:
 
     from discord_ferry.config import FerryConfig
     from discord_ferry.core.events import EventCallback
-    from discord_ferry.parser.models import DCEAuthor, DCEExport, DCEMessage
+    from discord_ferry.parser.models import DCEAuthor, DCEExport, DCEMessage, DCEReaction
     from discord_ferry.state import MigrationState
+
+logger = logging.getLogger(__name__)
+
+_VALID_REACTION_MODES = frozenset({"text", "native", "skip"})
 
 # Message types that should be silently skipped without even a warning.
 _SKIP_TYPES = frozenset(
@@ -46,8 +53,56 @@ _SKIP_TYPES = frozenset(
     }
 )
 
-# Emit a progress event every this many messages.
-_PROGRESS_EVERY = 50
+
+def _skip_attachment(
+    state: MigrationState,
+    filename: str,
+    reason: str,
+    phase: str = "messages",
+) -> str:
+    """Record a skipped attachment and return placeholder text."""
+    state.attachments_skipped += 1
+    state.warnings.append({"phase": phase, "type": "attachment_skipped", "message": reason})
+    return f"[{reason}]"
+
+
+def _build_reaction_text(reactions: list[DCEReaction], max_chars: int) -> str:
+    """Build a text summary of reactions within a character budget.
+
+    Args:
+        reactions: Parsed reactions with emoji name and count.
+        max_chars: Maximum characters available.
+
+    Returns:
+        Formatted string like ``\\n[Reactions: thumbsup 12 · tada 5]``
+        or empty string if no reactions or no budget.
+    """
+    if not reactions or max_chars <= 0:
+        return ""
+    valid = [(r.emoji.name, r.count) for r in reactions if r.count > 0]
+    if not valid:
+        return ""
+    parts = [f"{name} {count}" for name, count in valid]
+    full = "\n[Reactions: " + " · ".join(parts) + "]"
+    if len(full) <= max_chars:
+        return full
+    # Truncate: include as many reactions as fit
+    prefix = "\n[Reactions: "
+    suffix = "...]"
+    budget = max_chars - len(prefix) - len(suffix)
+    if budget <= 0:
+        return ""
+    truncated: list[str] = []
+    used = 0
+    for part in parts:
+        addition = (" · " + part) if truncated else part
+        if used + len(addition) > budget:
+            break
+        truncated.append(part)
+        used += len(addition)
+    if not truncated:
+        return ""
+    return prefix + " · ".join(truncated) + suffix
 
 
 # ---------------------------------------------------------------------------
@@ -69,6 +124,19 @@ async def run_messages(
         exports: Parsed DCE export files (one per channel/thread).
         on_event: Callback for progress events.
     """
+    # Validate reaction_mode — fall back to "text" on unrecognised values.
+    if config.reaction_mode not in _VALID_REACTION_MODES:
+        state.warnings.append(
+            {
+                "phase": "messages",
+                "type": "invalid_reaction_mode",
+                "message": (
+                    f"Unknown reaction_mode {config.reaction_mode!r}, falling back to 'text'"
+                ),
+            }
+        )
+        logger.warning("Unknown reaction_mode %r — falling back to 'text'", config.reaction_mode)
+
     # Sort deterministically by Discord channel ID.
     sorted_exports = sorted(exports, key=lambda e: e.channel.id)
 
@@ -108,6 +176,9 @@ async def run_messages(
             )
         )
         return
+
+    _checkpoint_interval = max(config.checkpoint_interval, 1)
+    _last_save_time = time.monotonic()
 
     async with get_session(config) as session:
         for export in sorted_exports:
@@ -218,8 +289,11 @@ async def run_messages(
                 )
 
                 # Periodic progress event and state save.
-                if (idx + 1) % _PROGRESS_EVERY == 0:
-                    save_state(state, config.output_dir)
+                if (idx + 1) % _checkpoint_interval == 0:
+                    now = time.monotonic()
+                    if now - _last_save_time >= 5.0:
+                        save_state(state, config.output_dir)
+                        _last_save_time = now
                     on_event(
                         MigrationEvent(
                             phase="messages",
@@ -323,8 +397,30 @@ async def _process_message(
         )
         return
 
+    # Step 0b: Detect attachment overflow (Stoat limit: 5 per message).
+    overflow_text = ""
+    if len(msg.attachments) > 5:
+        overflow = msg.attachments[5:]
+        overflow_names = ", ".join(att.file_name for att in overflow)
+        overflow_text = (
+            f"\n[+{len(overflow)} more attachment(s) not migrated "
+            f"(Stoat limit: 5): {overflow_names}]"
+        )
+        state.attachments_skipped += len(overflow)
+        state.warnings.append(
+            {
+                "phase": "messages",
+                "type": "attachment_overflow",
+                "message": (
+                    f"Message {msg.id}: {len(overflow)} attachments exceed Stoat limit of 5"
+                ),
+            }
+        )
+
     # Step 1: Upload attachments (max 5).
-    autumn_ids = await _upload_attachments(msg, config, state, session, on_event)
+    autumn_ids, attachment_placeholders = await _upload_attachments(
+        msg, config, state, session, on_event
+    )
 
     # Step 1b: Upload sticker images as additional attachments.
     _, sticker_paths = handle_stickers(msg.stickers, config.export_dir)
@@ -354,6 +450,10 @@ async def _process_message(
 
     # Step 2: Build and transform content.
     content = _build_content(msg, state)
+
+    # Append placeholders for skipped attachments (oversized, expired CDN).
+    if attachment_placeholders:
+        content = content + "\n" + "\n".join(attachment_placeholders)
 
     # Step 3: Build masquerade dict.
     masquerade = await _build_masquerade(msg.author, session, state, config)
@@ -398,6 +498,21 @@ async def _process_message(
     if msg.content == "" and not autumn_ids and not stoat_embeds:
         content = f"{format_original_timestamp(msg.timestamp)} [empty message]"
 
+    # Step 6b: Append reaction text if text mode.
+    _effective_mode = (
+        config.reaction_mode if config.reaction_mode in _VALID_REACTION_MODES else "text"
+    )
+    if msg.reactions and _effective_mode == "text":
+        # Budget is best-effort — overflow text may be appended after this.
+        # Step 7 truncation (2000 chars) is the true safety net.
+        remaining = 2000 - len(content)
+        reaction_text = _build_reaction_text(msg.reactions, remaining)
+        content += reaction_text
+
+    # Step 6c: Append overflow text for attachments beyond the 5-file limit.
+    if overflow_text:
+        content += overflow_text
+
     # Step 7: Truncate to 2000 characters.
     if len(content) > 2000:
         content = content[:1997] + "..."
@@ -418,30 +533,32 @@ async def _process_message(
         )
         stoat_msg_id: str = result["_id"]
         state.message_map[msg.id] = stoat_msg_id
+        state.referenced_autumn_ids.update(autumn_ids)
 
         if msg.is_pinned:
             state.pending_pins.append((stoat_channel_id, stoat_msg_id))
 
-        # Step 8b: Queue reactions.
-        for reaction in msg.reactions:
-            if reaction.emoji.id:  # Custom emoji.
-                stoat_emoji = state.emoji_map.get(reaction.emoji.id)
-                if stoat_emoji:
+        # Step 8b: Queue reactions (only in native mode).
+        if _effective_mode == "native":
+            for reaction in msg.reactions:
+                if reaction.emoji.id:  # Custom emoji.
+                    stoat_emoji = state.emoji_map.get(reaction.emoji.id)
+                    if stoat_emoji:
+                        state.pending_reactions.append(
+                            {
+                                "channel_id": stoat_channel_id,
+                                "message_id": stoat_msg_id,
+                                "emoji": stoat_emoji,
+                            }
+                        )
+                else:  # Unicode emoji.
                     state.pending_reactions.append(
                         {
                             "channel_id": stoat_channel_id,
                             "message_id": stoat_msg_id,
-                            "emoji": stoat_emoji,
+                            "emoji": reaction.emoji.name,
                         }
                     )
-            else:  # Unicode emoji.
-                state.pending_reactions.append(
-                    {
-                        "channel_id": stoat_channel_id,
-                        "message_id": stoat_msg_id,
-                        "emoji": reaction.emoji.name,
-                    }
-                )
 
     except Exception as exc:  # noqa: BLE001
         state.errors.append(
@@ -450,6 +567,14 @@ async def _process_message(
                 "type": "message_send_failed",
                 "message": f"Failed to send msg {msg.id}: {exc}",
             }
+        )
+        state.failed_messages.append(
+            FailedMessage(
+                discord_msg_id=msg.id,
+                stoat_channel_id=stoat_channel_id,
+                error=str(exc),
+                content_preview=content[:50] if content else "",
+            )
         )
         on_event(
             MigrationEvent(
@@ -509,10 +634,14 @@ def _build_content(msg: DCEMessage, state: MigrationState) -> str:
     content = convert_spoilers(content)
     content = strip_underline(content)
     content = remap_mentions(content, state.channel_map, state.role_map, state.author_names)
+    content = rewrite_discord_links(content, state.channel_map)
     content = remap_emoji(content, state.emoji_map)
 
     # Prepend original timestamp.
     content = f"{format_original_timestamp(msg.timestamp)} {content}"
+
+    if msg.timestamp_edited:
+        content += " *(edited)*"
 
     # Append sticker representations (text only — images uploaded separately).
     sticker_text, _ = handle_stickers(msg.stickers)
@@ -531,7 +660,7 @@ async def _upload_attachments(
     state: MigrationState,
     session: aiohttp.ClientSession,
     on_event: EventCallback,
-) -> list[str]:
+) -> tuple[list[str], list[str]]:
     """Upload up to 5 message attachments to Autumn.
 
     Args:
@@ -542,29 +671,64 @@ async def _upload_attachments(
         on_event: Callback for warning events.
 
     Returns:
-        List of Autumn file IDs for successfully uploaded attachments.
+        Tuple of (autumn_file_ids, placeholder_texts). Placeholders are
+        generated for skipped attachments (oversized, expired CDN URLs)
+        and should be appended to the message content by the caller.
     """
     autumn_ids: list[str] = []
+    placeholders: list[str] = []
     for att in msg.attachments[:5]:
-        local_path = _resolve_attachment_path(config.export_dir, att.url)
-        if local_path is None or not local_path.exists():
-            state.attachments_skipped += 1
-            state.warnings.append(
-                {
-                    "phase": "messages",
-                    "type": "missing_media",
-                    "message": (
-                        f"Attachment {att.id!r} ({att.file_name!r}) not found locally — skipped."
-                    ),
-                }
+        # Pre-check: skip oversized files before any network call.
+        limit = TAG_SIZE_LIMITS.get("attachments", 0)
+        if att.file_size_bytes > 0 and limit > 0 and att.file_size_bytes > limit:
+            reason = (
+                f"File too large: {att.file_name} "
+                f"({att.file_size_bytes / 1_048_576:.1f} MB, "
+                f"limit: {limit / 1_048_576:.1f} MB)"
             )
+            placeholder = _skip_attachment(state, att.file_name, reason)
+            placeholders.append(placeholder)
             on_event(
                 MigrationEvent(
                     phase="messages",
                     status="warning",
-                    message=f"Attachment {att.file_name!r} not found — skipped.",
+                    message=f"Attachment {att.file_name!r} too large — skipped.",
                 )
             )
+            continue
+
+        local_path = _resolve_attachment_path(config.export_dir, att.url)
+        if local_path is None or not local_path.exists() or not local_path.is_file():
+            if check_cdn_url_expiry(att.url) is True:
+                reason = f"Attachment expired: {att.file_name}"
+                placeholder = _skip_attachment(state, att.file_name, reason)
+                placeholders.append(placeholder)
+                on_event(
+                    MigrationEvent(
+                        phase="messages",
+                        status="warning",
+                        message=f"Attachment {att.file_name!r} expired — skipped.",
+                    )
+                )
+            else:
+                state.attachments_skipped += 1
+                state.warnings.append(
+                    {
+                        "phase": "messages",
+                        "type": "missing_media",
+                        "message": (
+                            f"Attachment {att.id!r} ({att.file_name!r}) "
+                            "not found locally — skipped."
+                        ),
+                    }
+                )
+                on_event(
+                    MigrationEvent(
+                        phase="messages",
+                        status="warning",
+                        message=f"Attachment {att.file_name!r} not found — skipped.",
+                    )
+                )
             continue
 
         try:
@@ -579,6 +743,7 @@ async def _upload_attachments(
             )
             autumn_ids.append(autumn_id)
             state.attachments_uploaded += 1
+            state.autumn_uploads[autumn_id] = att.id
         except Exception as exc:  # noqa: BLE001
             state.attachments_skipped += 1
             state.warnings.append(
@@ -596,7 +761,7 @@ async def _upload_attachments(
                 )
             )
 
-    return autumn_ids
+    return autumn_ids, placeholders
 
 
 async def _build_masquerade(

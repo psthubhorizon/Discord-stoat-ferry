@@ -3,9 +3,11 @@
 import json
 import logging
 import re
+import time
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qs, urlparse
 
 import ijson  # type: ignore[import-untyped]
 
@@ -116,6 +118,34 @@ def stream_messages(json_path: Path) -> Iterator[DCEMessage]:
             yield _parse_message(raw_msg)
 
 
+def check_cdn_url_expiry(url: str) -> bool | None:
+    """Check if a Discord CDN signed URL has expired.
+
+    Parses the ``ex`` query parameter (hex-encoded Unix timestamp) from
+    Discord's signed CDN URLs.
+
+    Returns:
+        True if the URL is expired, False if still valid, or None if the
+        URL format is unrecognised (no ``ex`` parameter, non-hex value,
+        or empty URL).
+    """
+    if not url:
+        return None
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        return None
+    qs = parse_qs(parsed.query)
+    ex_values = qs.get("ex")
+    if not ex_values:
+        return None
+    try:
+        expiry_ts = int(ex_values[0], 16)
+    except ValueError:
+        return None
+    return expiry_ts < time.time()
+
+
 def validate_export(
     exports: list[DCEExport],
     export_dir: Path,
@@ -140,6 +170,7 @@ def validate_export(
     warnings: list[dict[str, str]] = []
     unique_channel_ids: set[str] = set()
     custom_emoji_ids: set[str] = set()
+    expired_count = 0
 
     for export in exports:
         channel_name = export.channel.name
@@ -177,10 +208,10 @@ def validate_export(
                 )
                 markdown_warned = True
 
-            # Check for HTTP attachment URLs (first occurrence only)
-            if not http_warned:
-                for att in msg.attachments:
-                    if att.url.startswith("http"):
+            # Check for HTTP attachment URLs (first occurrence only) and expired CDN URLs
+            for att in msg.attachments:
+                if att.url.startswith("http"):
+                    if not http_warned:
                         warnings.append(
                             {
                                 "type": "http_attachment",
@@ -191,7 +222,8 @@ def validate_export(
                             }
                         )
                         http_warned = True
-                        break
+                    if check_cdn_url_expiry(att.url) is True:
+                        expired_count += 1
 
             # Collect author names (if caller requested)
             if author_names is not None and msg.author.id not in author_names:
@@ -217,6 +249,18 @@ def validate_export(
                     "message": f"Channel '{channel_name}' has no messages",
                 }
             )
+
+    if expired_count > 0:
+        warnings.append(
+            {
+                "phase": "validate",
+                "type": "expired_cdn_url",
+                "message": (
+                    f"{expired_count} attachment URL(s) have expired. "
+                    "Re-export with --media flag to download files locally."
+                ),
+            }
+        )
 
     if len(unique_channel_ids) > 200:
         warnings.append(

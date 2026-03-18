@@ -23,6 +23,8 @@ class ReviewSummary:
     thread_count: int
     has_permissions: bool
     nsfw_channel_count: int
+    threads_filtered: int = 0
+    user_override_count: int = 0
     warnings: list[str] = field(default_factory=list)
 
 
@@ -78,13 +80,15 @@ def build_review_summary(
                 if reaction.emoji.id:
                     emoji_ids.add(reaction.emoji.id)
 
-    # NSFW info from metadata
+    # NSFW info and user override count from metadata
     nsfw_count = 0
+    user_override_count = 0
     has_permissions = discord_metadata is not None
     if discord_metadata:
         for ch_meta in discord_metadata.channel_metadata.values():
             if ch_meta.nsfw:
                 nsfw_count += 1
+        user_override_count = len(discord_metadata.user_override_channels)
 
     # Build warnings
     warnings: list[str] = []
@@ -109,5 +113,6 @@ def build_review_summary(
         thread_count=thread_count,
         has_permissions=has_permissions,
         nsfw_channel_count=nsfw_count,
+        user_override_count=user_override_count,
         warnings=warnings,
     )
