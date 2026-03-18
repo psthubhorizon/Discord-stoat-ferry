@@ -1417,3 +1417,185 @@ async def test_attachment_exactly_at_limit_proceeds(
     assert len(result) == 1
     assert state.attachments_uploaded == 1
     assert state.attachments_skipped == 0
+
+
+# ---------------------------------------------------------------------------
+# CDN expiry check in _upload_attachments
+# ---------------------------------------------------------------------------
+
+
+async def test_expired_url_no_local_file_produces_placeholder(tmp_path: Path) -> None:
+    """Expired CDN URL + no local file -> specific expired warning via _skip_attachment."""
+    config = _make_config(tmp_path)
+    state = _make_state()
+    msg = DCEMessage(
+        id="msg1",
+        type="Default",
+        timestamp="2024-01-01T00:00:00Z",
+        content="",
+        author=DCEAuthor(id="u1", name="User"),
+        attachments=[
+            DCEAttachment(
+                id="att1",
+                url="https://cdn.discordapp.com/f.png?ex=60000000",
+                file_name="photo.png",
+                file_size_bytes=100,
+            )
+        ],
+    )
+    async with aiohttp.ClientSession() as session:
+        autumn_ids = await _upload_attachments(msg, config, state, session, lambda e: None)
+    assert autumn_ids == []
+    assert state.attachments_skipped >= 1
+    assert any(
+        w.get("type") == "attachment_skipped" and "expired" in w.get("message", "").lower()
+        for w in state.warnings
+    )
+
+
+async def test_missing_local_non_expired_url_uses_generic_warning(tmp_path: Path) -> None:
+    """Missing local file + non-expired URL -> generic missing_media warning."""
+    config = _make_config(tmp_path)
+    state = _make_state()
+    msg = DCEMessage(
+        id="msg1",
+        type="Default",
+        timestamp="2024-01-01T00:00:00Z",
+        content="",
+        author=DCEAuthor(id="u1", name="User"),
+        attachments=[
+            DCEAttachment(
+                id="att1",
+                url="https://cdn.discordapp.com/f.png?ex=ffffffff",
+                file_name="photo.png",
+                file_size_bytes=100,
+            )
+        ],
+    )
+    async with aiohttp.ClientSession() as session:
+        autumn_ids = await _upload_attachments(msg, config, state, session, lambda e: None)
+    assert autumn_ids == []
+    assert any(w.get("type") == "missing_media" for w in state.warnings)
+
+
+async def test_empty_url_attachment_no_crash(tmp_path: Path) -> None:
+    """Empty URL attachment doesn't crash CDN check (returns None)."""
+    config = _make_config(tmp_path)
+    state = _make_state()
+    msg = DCEMessage(
+        id="msg1",
+        type="Default",
+        timestamp="2024-01-01T00:00:00Z",
+        content="",
+        author=DCEAuthor(id="u1", name="User"),
+        attachments=[DCEAttachment(id="att1", url="", file_name="ghost.txt", file_size_bytes=0)],
+    )
+    async with aiohttp.ClientSession() as session:
+        autumn_ids = await _upload_attachments(msg, config, state, session, lambda e: None)
+    assert autumn_ids == []
+    # Should use generic missing_media, not crash on CDN check
+    assert any(w.get("type") == "missing_media" for w in state.warnings)
+
+
+# ---------------------------------------------------------------------------
+# Configurable checkpoint interval + time throttle (S5)
+# ---------------------------------------------------------------------------
+
+
+async def test_checkpoint_interval_zero_clamped(tmp_path: Path, mock_aiohttp: aioresponses) -> None:
+    """checkpoint_interval=0 does not cause ZeroDivisionError."""
+    mock_aiohttp.post(CHANNEL_MSG_URL, payload={"_id": "stoat_msg1"})
+    mock_aiohttp.post(CHANNEL_MSG_URL, payload={"_id": "stoat_msg2"})
+    mock_aiohttp.post(CHANNEL_MSG_URL, payload={"_id": "stoat_msg3"})
+    mock_aiohttp.post(CHANNEL_MSG_URL, payload={"_id": "stoat_msg4"})
+    mock_aiohttp.post(CHANNEL_MSG_URL, payload={"_id": "stoat_msg5"})
+
+    state = _make_state()
+    config = _make_config(tmp_path, checkpoint_interval=0)
+
+    msgs = [
+        _make_message(
+            id=f"msg{i}",
+            content=f"hello {i}",
+            timestamp=f"2024-01-15T12:{i:02d}:00+00:00",
+        )
+        for i in range(5)
+    ]
+    export = _make_export(messages=msgs)
+
+    # Should NOT raise ZeroDivisionError
+    await run_messages(config, state, [export], lambda e: None)
+
+    assert len(state.message_map) == 5
+
+
+async def test_checkpoint_saves_are_time_throttled(
+    tmp_path: Path, mock_aiohttp: aioresponses
+) -> None:
+    """save_state during message loop is only called when 5s have elapsed."""
+    # Create enough messages to trigger multiple checkpoint intervals
+    num_msgs = 10
+    for _ in range(num_msgs):
+        mock_aiohttp.post(CHANNEL_MSG_URL, payload={"_id": "stoat_msg"})
+
+    state = _make_state()
+    config = _make_config(tmp_path, checkpoint_interval=3)
+
+    msgs = [
+        _make_message(
+            id=f"msg{i}",
+            content=f"hello {i}",
+            timestamp=f"2024-01-15T12:{i:02d}:00+00:00",
+        )
+        for i in range(num_msgs)
+    ]
+    export = _make_export(messages=msgs)
+
+    save_calls: list[object] = []
+
+    def counting_save(st: object, path: object) -> None:
+        save_calls.append(1)
+
+    # Patch save_state in messages module to count calls.
+    # Time passes near-instantly in test, so the 5s throttle means
+    # in-loop saves should be suppressed. Only channel-end save fires.
+    with patch("discord_ferry.migrator.messages.save_state", counting_save):
+        await run_messages(config, state, [export], lambda e: None)
+
+    # At checkpoint_interval=3, indices 2,5,8 hit the modulo check (3 times).
+    # But the 5s time throttle suppresses all in-loop saves because the test
+    # runs in <1ms. Only the channel-end unconditional save should fire (1 call).
+    assert save_calls == [1], (
+        f"Expected only the channel-end save (1 call), got {len(save_calls)} calls"
+    )
+
+
+async def test_checkpoint_interval_from_config(tmp_path: Path, mock_aiohttp: aioresponses) -> None:
+    """checkpoint_interval config field is respected in the modulo check."""
+    # With checkpoint_interval=2 and 4 messages, indices 1 and 3 hit modulo.
+    for _ in range(4):
+        mock_aiohttp.post(CHANNEL_MSG_URL, payload={"_id": "stoat_msg"})
+
+    state = _make_state()
+    config = _make_config(tmp_path, checkpoint_interval=2)
+
+    msgs = [
+        _make_message(
+            id=f"msg{i}",
+            content=f"hello {i}",
+            timestamp=f"2024-01-15T12:{i:02d}:00+00:00",
+        )
+        for i in range(4)
+    ]
+    export = _make_export(messages=msgs)
+    events: list[MigrationEvent] = []
+
+    await run_messages(config, state, [export], _collect_events(events))
+
+    # Progress events at checkpoints: idx 1 (msg 2/4) and idx 3 (msg 4/4).
+    progress_with_current = [
+        e for e in events if e.status == "progress" and e.current is not None and e.current > 0
+    ]
+    checkpoint_counts = [e.current for e in progress_with_current]
+    assert 2 in checkpoint_counts, f"Expected checkpoint at message 2, got {checkpoint_counts}"
+    assert 4 in checkpoint_counts, f"Expected checkpoint at message 4, got {checkpoint_counts}"

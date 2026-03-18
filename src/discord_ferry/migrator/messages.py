@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from typing import TYPE_CHECKING, Any
 
 from discord_ferry.core.events import MigrationEvent
 from discord_ferry.migrator.api import api_send_message, get_session
 from discord_ferry.migrator.sanitize import truncate_name
-from discord_ferry.parser.dce_parser import stream_messages
+from discord_ferry.parser.dce_parser import check_cdn_url_expiry, stream_messages
 from discord_ferry.parser.transforms import (
     convert_spoilers,
     flatten_embed,
@@ -45,9 +46,6 @@ _SKIP_TYPES = frozenset(
         "ChannelIconChange",
     }
 )
-
-# Emit a progress event every this many messages.
-_PROGRESS_EVERY = 50
 
 
 def _skip_attachment(
@@ -120,6 +118,9 @@ async def run_messages(
             )
         )
         return
+
+    _checkpoint_interval = max(config.checkpoint_interval, 1)
+    _last_save_time = time.monotonic()
 
     async with get_session(config) as session:
         for export in sorted_exports:
@@ -230,8 +231,11 @@ async def run_messages(
                 )
 
                 # Periodic progress event and state save.
-                if (idx + 1) % _PROGRESS_EVERY == 0:
-                    save_state(state, config.output_dir)
+                if (idx + 1) % _checkpoint_interval == 0:
+                    now = time.monotonic()
+                    if now - _last_save_time >= 5.0:
+                        save_state(state, config.output_dir)
+                        _last_save_time = now
                     on_event(
                         MigrationEvent(
                             phase="messages",
@@ -577,24 +581,36 @@ async def _upload_attachments(
             continue
 
         local_path = _resolve_attachment_path(config.export_dir, att.url)
-        if local_path is None or not local_path.exists():
-            state.attachments_skipped += 1
-            state.warnings.append(
-                {
-                    "phase": "messages",
-                    "type": "missing_media",
-                    "message": (
-                        f"Attachment {att.id!r} ({att.file_name!r}) not found locally — skipped."
-                    ),
-                }
-            )
-            on_event(
-                MigrationEvent(
-                    phase="messages",
-                    status="warning",
-                    message=f"Attachment {att.file_name!r} not found — skipped.",
+        if local_path is None or not local_path.exists() or not local_path.is_file():
+            if check_cdn_url_expiry(att.url) is True:
+                reason = f"Attachment expired: {att.file_name}"
+                _skip_attachment(state, att.file_name, reason)
+                on_event(
+                    MigrationEvent(
+                        phase="messages",
+                        status="warning",
+                        message=f"Attachment {att.file_name!r} expired — skipped.",
+                    )
                 )
-            )
+            else:
+                state.attachments_skipped += 1
+                state.warnings.append(
+                    {
+                        "phase": "messages",
+                        "type": "missing_media",
+                        "message": (
+                            f"Attachment {att.id!r} ({att.file_name!r}) "
+                            "not found locally — skipped."
+                        ),
+                    }
+                )
+                on_event(
+                    MigrationEvent(
+                        phase="messages",
+                        status="warning",
+                        message=f"Attachment {att.file_name!r} not found — skipped.",
+                    )
+                )
             continue
 
         try:
