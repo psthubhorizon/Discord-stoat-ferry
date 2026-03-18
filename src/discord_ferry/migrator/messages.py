@@ -612,6 +612,9 @@ def _build_content(msg: DCEMessage, state: MigrationState) -> str:
     # Prepend original timestamp.
     content = f"{format_original_timestamp(msg.timestamp)} {content}"
 
+    if msg.timestamp_edited:
+        content += " *(edited)*"
+
     # Append sticker representations (text only — images uploaded separately).
     sticker_text, _ = handle_stickers(msg.stickers)
     content += sticker_text

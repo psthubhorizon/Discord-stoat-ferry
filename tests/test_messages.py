@@ -1854,3 +1854,43 @@ async def test_invalid_reaction_mode_defaults_to_text(
     assert "[Reactions:" in sent_kwargs[0]["content"]
     # Warning should be logged about invalid mode
     assert any("reaction_mode" in w["message"] for w in state.warnings)
+
+
+# ---------------------------------------------------------------------------
+# S3: Edited message indicator
+# ---------------------------------------------------------------------------
+
+
+def test_edited_message_gets_indicator() -> None:
+    """Message with timestamp_edited set contains *(edited)* in built content."""
+    state = _make_state()
+    msg = _make_message(
+        content="original text",
+        timestamp="2024-01-15T12:00:00+00:00",
+        timestamp_edited="2024-01-15T13:00:00+00:00",
+    )
+    result = _build_content(msg, state)
+    assert "*(edited)*" in result
+
+
+def test_non_edited_message_no_indicator() -> None:
+    """Message without timestamp_edited does NOT contain *(edited)*."""
+    state = _make_state()
+    msg = _make_message(
+        content="original text",
+        timestamp="2024-01-15T12:00:00+00:00",
+    )
+    result = _build_content(msg, state)
+    assert "*(edited)*" not in result
+
+
+def test_empty_content_with_edit_timestamp() -> None:
+    """Empty content with edit timestamp still gets the indicator."""
+    state = _make_state()
+    msg = _make_message(
+        content="",
+        timestamp="2024-01-15T12:00:00+00:00",
+        timestamp_edited="2024-01-15T14:00:00+00:00",
+    )
+    result = _build_content(msg, state)
+    assert "*(edited)*" in result
