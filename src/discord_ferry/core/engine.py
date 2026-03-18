@@ -36,7 +36,7 @@ from discord_ferry.parser.dce_parser import parse_export_directory, stream_messa
 from discord_ferry.parser.models import DCEExport, DCEMessage
 from discord_ferry.reporter import generate_report
 from discord_ferry.review import build_review_summary
-from discord_ferry.state import MigrationState, load_state, save_state
+from discord_ferry.state import FailedMessage, MigrationState, load_state, save_state
 
 PhaseFunction = Callable[
     [FerryConfig, MigrationState, list[DCEExport], EventCallback],
@@ -528,7 +528,8 @@ async def run_retry_failed(
     async with get_session(config) as session:
         config.session = session
         retried = 0
-        for fm in list(state.failed_messages):  # Copy list — we modify during iteration
+        still_failed: list[FailedMessage] = []
+        for fm in state.failed_messages:
             found_msg = found_messages.get(fm.discord_msg_id)
             if found_msg is None:
                 on_event(
@@ -538,6 +539,7 @@ async def run_retry_failed(
                         message=f"Message {fm.discord_msg_id} not found in exports — skipping.",
                     )
                 )
+                still_failed.append(fm)
                 continue
 
             stoat_channel_id = fm.stoat_channel_id
@@ -550,10 +552,11 @@ async def run_retry_failed(
                     session=session,
                     on_event=on_event,
                 )
-                state.failed_messages.remove(fm)
                 retried += 1
             except Exception:  # noqa: BLE001
                 fm.retry_count += 1
+                still_failed.append(fm)
+        state.failed_messages = still_failed
     config.session = None
 
     save_state(state, config.output_dir)
