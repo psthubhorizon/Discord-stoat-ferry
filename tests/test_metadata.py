@@ -2,6 +2,9 @@
 
 from pathlib import Path
 
+import aiohttp
+
+from discord_ferry.discord import fetch_and_translate_guild_metadata
 from discord_ferry.discord.metadata import (
     ChannelMeta,
     DiscordMetadata,
@@ -90,3 +93,59 @@ def test_channel_without_overrides(tmp_path: Path) -> None:
     assert loaded is not None
     assert loaded.channel_metadata["ch1"].default_override is None
     assert loaded.channel_metadata["ch1"].role_overrides == []
+
+
+_DISCORD_API = "https://discord.com/api/v10"
+_GUILD_ID = "999000000000000001"
+
+
+async def test_everyone_deny_view_channel_produces_stoat_deny_bit() -> None:
+    """Discord @everyone VIEW_CHANNEL deny -> Stoat ViewChannel deny bit."""
+    from aioresponses import aioresponses
+
+    discord_view_channel = 1 << 10  # Discord VIEW_CHANNEL bit
+    stoat_view_channel = 1 << 20  # Stoat ViewChannel bit
+
+    channel_id = "555000000000000001"
+
+    mock_roles = [
+        {
+            "id": _GUILD_ID,  # @everyone role id == guild_id
+            "name": "@everyone",
+            "permissions": "0",
+            "position": 0,
+            "color": 0,
+            "hoist": False,
+            "managed": False,
+        },
+    ]
+
+    mock_channels = [
+        {
+            "id": channel_id,
+            "name": "private-channel",
+            "type": 0,
+            "nsfw": False,
+            "permission_overwrites": [
+                {
+                    "id": _GUILD_ID,  # @everyone override
+                    "type": 0,  # role type
+                    "allow": "0",
+                    "deny": str(discord_view_channel),
+                },
+            ],
+        },
+    ]
+
+    with aioresponses() as m:
+        m.get(f"{_DISCORD_API}/guilds/{_GUILD_ID}/roles", payload=mock_roles)
+        m.get(f"{_DISCORD_API}/guilds/{_GUILD_ID}/channels", payload=mock_channels)
+
+        async with aiohttp.ClientSession() as session:
+            meta = await fetch_and_translate_guild_metadata(session, "test-token", _GUILD_ID)
+
+    ch_meta = meta.channel_metadata[channel_id]
+    assert ch_meta.default_override is not None, "Expected default_override for @everyone deny"
+    assert ch_meta.default_override.deny & stoat_view_channel, (
+        f"Expected Stoat ViewChannel deny bit (1<<20), got {ch_meta.default_override.deny}"
+    )
