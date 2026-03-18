@@ -77,6 +77,10 @@ def generate_report(
         },
     }
 
+    # Failed message tracking (dead-letter queue)
+    report["failed_messages"] = len(state.failed_messages)
+    report["failed_message_ids"] = [fm.discord_msg_id for fm in state.failed_messages]
+
     # Orphan upload tracking
     orphaned_ids = [aid for aid in state.autumn_uploads if aid not in state.referenced_autumn_ids]
     report["orphaned_uploads"] = len(orphaned_ids)

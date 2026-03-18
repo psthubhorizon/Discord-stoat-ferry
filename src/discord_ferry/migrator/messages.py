@@ -20,7 +20,7 @@ from discord_ferry.parser.transforms import (
     remap_mentions,
     strip_underline,
 )
-from discord_ferry.state import save_state
+from discord_ferry.state import FailedMessage, save_state
 from discord_ferry.uploader.autumn import TAG_SIZE_LIMITS, upload_with_cache
 
 if TYPE_CHECKING:
@@ -473,6 +473,14 @@ async def _process_message(
                 "type": "message_send_failed",
                 "message": f"Failed to send msg {msg.id}: {exc}",
             }
+        )
+        state.failed_messages.append(
+            FailedMessage(
+                discord_msg_id=msg.id,
+                stoat_channel_id=stoat_channel_id,
+                error=str(exc),
+                content_preview=content[:50] if content else "",
+            )
         )
         on_event(
             MigrationEvent(

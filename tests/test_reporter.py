@@ -11,7 +11,7 @@ from discord_ferry.discord.metadata import (
 )
 from discord_ferry.parser.models import DCEChannel, DCEExport, DCEGuild
 from discord_ferry.reporter import generate_report
-from discord_ferry.state import MigrationState
+from discord_ferry.state import FailedMessage, MigrationState
 
 
 def _make_config(tmp_path: Path) -> FerryConfig:
@@ -479,3 +479,34 @@ def test_report_lists_orphaned_ids(tmp_path: Path) -> None:
 
     assert report["orphaned_uploads"] == 2
     assert set(report["orphaned_ids"]) == {"autumn2", "autumn3"}  # type: ignore[arg-type]
+
+
+# ---------------------------------------------------------------------------
+# Failed message reporting (S1)
+# ---------------------------------------------------------------------------
+
+
+def test_report_includes_failed_message_count_and_ids(tmp_path: Path) -> None:
+    """Report includes failed_messages count and failed_message_ids list."""
+    config = _make_config(tmp_path)
+    state = MigrationState(
+        failed_messages=[
+            FailedMessage(
+                discord_msg_id="msg1",
+                stoat_channel_id="ch1",
+                error="API timeout",
+            ),
+            FailedMessage(
+                discord_msg_id="msg2",
+                stoat_channel_id="ch2",
+                error="Rate limited",
+                content_preview="hello",
+            ),
+        ],
+    )
+    exports = [_make_export()]
+
+    report = generate_report(config, state, exports)
+
+    assert report["failed_messages"] == 2
+    assert set(report["failed_message_ids"]) == {"msg1", "msg2"}  # type: ignore[arg-type]

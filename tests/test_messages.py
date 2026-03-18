@@ -29,7 +29,7 @@ from discord_ferry.parser.models import (
     DCEReaction,
     DCEReference,
 )
-from discord_ferry.state import MigrationState
+from discord_ferry.state import FailedMessage, MigrationState
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -1670,3 +1670,82 @@ async def test_failed_send_leaves_orphan(tmp_path: Path) -> None:
     assert "autumn_orphan1" in state.autumn_uploads
     # ...but NOT marked as referenced (send failed)
     assert "autumn_orphan1" not in state.referenced_autumn_ids
+
+
+# ---------------------------------------------------------------------------
+# Dead-letter queue: FailedMessage on send failure (S1)
+# ---------------------------------------------------------------------------
+
+
+async def test_message_failure_creates_failed_message(tmp_path: Path) -> None:
+    """A send failure creates a FailedMessage with correct fields in state.failed_messages."""
+
+    async def always_fail(
+        session: Any, stoat_url: Any, token: Any, channel_id: Any, **kwargs: Any
+    ) -> dict[str, Any]:
+        raise RuntimeError("API down")
+
+    state = _make_state()
+    config = _make_config(tmp_path)
+    msg = _make_message(id="msg_fail", content="important message")
+    export = _make_export(messages=[msg])
+
+    with patch("discord_ferry.migrator.messages.api_send_message", always_fail):
+        await run_messages(config, state, [export], lambda e: None)
+
+    assert len(state.failed_messages) == 1
+    fm = state.failed_messages[0]
+    assert isinstance(fm, FailedMessage)
+    assert fm.discord_msg_id == "msg_fail"
+    assert fm.stoat_channel_id == "stoat_ch1"
+    assert "API down" in fm.error
+    assert fm.retry_count == 0
+
+
+async def test_failed_message_content_preview_truncated(tmp_path: Path) -> None:
+    """Content preview is truncated to 50 chars for long messages."""
+
+    async def always_fail(
+        session: Any, stoat_url: Any, token: Any, channel_id: Any, **kwargs: Any
+    ) -> dict[str, Any]:
+        raise RuntimeError("fail")
+
+    long_content = "x" * 5000
+    state = _make_state()
+    config = _make_config(tmp_path)
+    msg = _make_message(id="msg_long", content=long_content)
+    export = _make_export(messages=[msg])
+
+    with patch("discord_ferry.migrator.messages.api_send_message", always_fail):
+        await run_messages(config, state, [export], lambda e: None)
+
+    assert len(state.failed_messages) == 1
+    assert len(state.failed_messages[0].content_preview) == 50
+
+
+async def test_forwarded_message_failure_no_crash(tmp_path: Path) -> None:
+    """Forwarded messages (empty content) that fail don't crash the preview slice."""
+
+    async def always_fail(
+        session: Any, stoat_url: Any, token: Any, channel_id: Any, **kwargs: Any
+    ) -> dict[str, Any]:
+        raise RuntimeError("fail")
+
+    state = _make_state()
+    config = _make_config(tmp_path)
+    # Non-forwarded empty content message (no reference) — will proceed to send
+    msg = _make_message(
+        id="msg_empty",
+        content="",
+        attachments=[
+            DCEAttachment(id="att1", url="missing.png", file_name="missing.png"),
+        ],
+    )
+    export = _make_export(messages=[msg])
+
+    with patch("discord_ferry.migrator.messages.api_send_message", always_fail):
+        await run_messages(config, state, [export], lambda e: None)
+
+    # Should not crash — content_preview should be empty string or short
+    assert len(state.failed_messages) == 1
+    assert len(state.failed_messages[0].content_preview) <= 50
