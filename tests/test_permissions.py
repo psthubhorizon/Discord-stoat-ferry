@@ -112,3 +112,10 @@ def test_deny_multiple_bits() -> None:
 def test_deny_unmapped_bits_dropped() -> None:
     """Unmapped Discord bits in deny context are silently dropped."""
     assert translate_permissions(1 << 1, is_deny=True) == 0
+
+
+def test_deny_administrator_with_other_bits_preserves_others() -> None:
+    """C1 fix: ADMINISTRATOR + VIEW_CHANNEL in deny strips ADMIN, keeps VIEW_CHANNEL."""
+    discord_bits = (1 << 3) | (1 << 10)  # ADMINISTRATOR + VIEW_CHANNEL
+    result = translate_permissions(discord_bits, is_deny=True)
+    assert result == 1 << 20  # Only ViewChannel deny, ADMIN stripped

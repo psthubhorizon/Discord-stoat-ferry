@@ -1352,9 +1352,12 @@ async def test_oversized_attachment_skipped_before_upload(
     msg = _make_message(id="msg1", content="with attachment", attachments=[oversized])
 
     async with aiohttp.ClientSession() as session:
-        result = await _upload_attachments(msg, config, state, session, _collect_events(events))
+        result_ids, result_placeholders = await _upload_attachments(
+            msg, config, state, session, _collect_events(events)
+        )
 
-    assert result == []
+    assert result_ids == []
+    assert len(result_placeholders) >= 1
     assert state.attachments_skipped == 1
     assert any(w["type"] == "attachment_skipped" for w in state.warnings)
     warning_events = [e for e in events if e.status == "warning"]
@@ -1383,9 +1386,11 @@ async def test_file_size_zero_falls_through_to_upload(
     msg = _make_message(id="msg1", content="with file", attachments=[att])
 
     async with aiohttp.ClientSession() as session:
-        result = await _upload_attachments(msg, config, state, session, _collect_events(events))
+        result_ids, _result_placeholders = await _upload_attachments(
+            msg, config, state, session, _collect_events(events)
+        )
 
-    assert len(result) == 1
+    assert len(result_ids) == 1
     assert state.attachments_uploaded == 1
     assert state.attachments_skipped == 0
 
@@ -1412,9 +1417,11 @@ async def test_attachment_exactly_at_limit_proceeds(
     msg = _make_message(id="msg1", content="exact limit", attachments=[att])
 
     async with aiohttp.ClientSession() as session:
-        result = await _upload_attachments(msg, config, state, session, _collect_events(events))
+        result_ids, _result_ph = await _upload_attachments(
+            msg, config, state, session, _collect_events(events)
+        )
 
-    assert len(result) == 1
+    assert len(result_ids) == 1
     assert state.attachments_uploaded == 1
     assert state.attachments_skipped == 0
 
@@ -1444,7 +1451,9 @@ async def test_expired_url_no_local_file_produces_placeholder(tmp_path: Path) ->
         ],
     )
     async with aiohttp.ClientSession() as session:
-        autumn_ids = await _upload_attachments(msg, config, state, session, lambda e: None)
+        autumn_ids, _placeholders = await _upload_attachments(
+            msg, config, state, session, lambda e: None
+        )
     assert autumn_ids == []
     assert state.attachments_skipped >= 1
     assert any(
@@ -1473,7 +1482,9 @@ async def test_missing_local_non_expired_url_uses_generic_warning(tmp_path: Path
         ],
     )
     async with aiohttp.ClientSession() as session:
-        autumn_ids = await _upload_attachments(msg, config, state, session, lambda e: None)
+        autumn_ids, _placeholders = await _upload_attachments(
+            msg, config, state, session, lambda e: None
+        )
     assert autumn_ids == []
     assert any(w.get("type") == "missing_media" for w in state.warnings)
 
@@ -1491,7 +1502,9 @@ async def test_empty_url_attachment_no_crash(tmp_path: Path) -> None:
         attachments=[DCEAttachment(id="att1", url="", file_name="ghost.txt", file_size_bytes=0)],
     )
     async with aiohttp.ClientSession() as session:
-        autumn_ids = await _upload_attachments(msg, config, state, session, lambda e: None)
+        autumn_ids, _placeholders = await _upload_attachments(
+            msg, config, state, session, lambda e: None
+        )
     assert autumn_ids == []
     # Should use generic missing_media, not crash on CDN check
     assert any(w.get("type") == "missing_media" for w in state.warnings)

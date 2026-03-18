@@ -42,8 +42,15 @@ def translate_permissions(discord_bits: int, *, is_deny: bool = False) -> int:
     """
     if discord_bits & (1 << 3):  # ADMINISTRATOR
         if is_deny:
-            return 0  # Denying ADMIN doesn't mean "deny all" in Stoat
-        return ALL_STOAT_PERMISSIONS
+            # Strip ADMIN bit, translate remaining deny bits normally.
+            # Denying ADMIN in Discord doesn't mean "deny all" in Stoat,
+            # but other deny bits alongside ADMIN still carry real meaning.
+            discord_bits &= ~(1 << 3)
+            if discord_bits == 0:
+                return 0
+            # Fall through to normal translation below
+        else:
+            return ALL_STOAT_PERMISSIONS
 
     stoat_bits = 0
     for discord_bit, stoat_target in DISCORD_TO_STOAT.items():

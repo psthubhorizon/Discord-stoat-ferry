@@ -11,6 +11,7 @@ import aiohttp
 from discord_ferry.core.events import MigrationEvent
 from discord_ferry.migrator.api import get_session
 from discord_ferry.parser.dce_parser import stream_messages
+from discord_ferry.state import save_state
 from discord_ferry.uploader.autumn import upload_with_cache
 
 if TYPE_CHECKING:
@@ -210,6 +211,10 @@ async def run_avatars(
                 )
                 state.avatar_cache[author_id] = autumn_id
                 uploaded += 1
+
+                # Periodic state save every 10 avatars for crash recovery.
+                if uploaded % 10 == 0:
+                    save_state(state, config.output_dir)
 
             except Exception as exc:  # noqa: BLE001
                 state.warnings.append(

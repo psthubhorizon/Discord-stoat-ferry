@@ -340,7 +340,9 @@ async def _process_message(
         return
 
     # Step 1: Upload attachments (max 5).
-    autumn_ids = await _upload_attachments(msg, config, state, session, on_event)
+    autumn_ids, attachment_placeholders = await _upload_attachments(
+        msg, config, state, session, on_event
+    )
 
     # Step 1b: Upload sticker images as additional attachments.
     _, sticker_paths = handle_stickers(msg.stickers, config.export_dir)
@@ -370,6 +372,10 @@ async def _process_message(
 
     # Step 2: Build and transform content.
     content = _build_content(msg, state)
+
+    # Append placeholders for skipped attachments (oversized, expired CDN).
+    if attachment_placeholders:
+        content = content + "\n" + "\n".join(attachment_placeholders)
 
     # Step 3: Build masquerade dict.
     masquerade = await _build_masquerade(msg.author, session, state, config)
@@ -547,7 +553,7 @@ async def _upload_attachments(
     state: MigrationState,
     session: aiohttp.ClientSession,
     on_event: EventCallback,
-) -> list[str]:
+) -> tuple[list[str], list[str]]:
     """Upload up to 5 message attachments to Autumn.
 
     Args:
@@ -558,9 +564,12 @@ async def _upload_attachments(
         on_event: Callback for warning events.
 
     Returns:
-        List of Autumn file IDs for successfully uploaded attachments.
+        Tuple of (autumn_file_ids, placeholder_texts). Placeholders are
+        generated for skipped attachments (oversized, expired CDN URLs)
+        and should be appended to the message content by the caller.
     """
     autumn_ids: list[str] = []
+    placeholders: list[str] = []
     for att in msg.attachments[:5]:
         # Pre-check: skip oversized files before any network call.
         limit = TAG_SIZE_LIMITS.get("attachments", 0)
@@ -570,7 +579,8 @@ async def _upload_attachments(
                 f"({att.file_size_bytes / 1_048_576:.1f} MB, "
                 f"limit: {limit / 1_048_576:.1f} MB)"
             )
-            _skip_attachment(state, att.file_name, reason)
+            placeholder = _skip_attachment(state, att.file_name, reason)
+            placeholders.append(placeholder)
             on_event(
                 MigrationEvent(
                     phase="messages",
@@ -584,7 +594,8 @@ async def _upload_attachments(
         if local_path is None or not local_path.exists() or not local_path.is_file():
             if check_cdn_url_expiry(att.url) is True:
                 reason = f"Attachment expired: {att.file_name}"
-                _skip_attachment(state, att.file_name, reason)
+                placeholder = _skip_attachment(state, att.file_name, reason)
+                placeholders.append(placeholder)
                 on_event(
                     MigrationEvent(
                         phase="messages",
@@ -642,7 +653,7 @@ async def _upload_attachments(
                 )
             )
 
-    return autumn_ids
+    return autumn_ids, placeholders
 
 
 async def _build_masquerade(
