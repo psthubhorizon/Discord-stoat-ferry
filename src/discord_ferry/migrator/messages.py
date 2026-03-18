@@ -19,6 +19,7 @@ from discord_ferry.parser.transforms import (
     handle_stickers,
     remap_emoji,
     remap_mentions,
+    rewrite_discord_links,
     strip_underline,
 )
 from discord_ferry.state import FailedMessage, save_state
@@ -631,6 +632,7 @@ def _build_content(msg: DCEMessage, state: MigrationState) -> str:
     content = convert_spoilers(content)
     content = strip_underline(content)
     content = remap_mentions(content, state.channel_map, state.role_map, state.author_names)
+    content = rewrite_discord_links(content, state.channel_map)
     content = remap_emoji(content, state.emoji_map)
 
     # Prepend original timestamp.

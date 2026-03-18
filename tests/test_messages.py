@@ -2004,3 +2004,25 @@ async def test_ten_attachments_overflow(tmp_path: Path, mock_aiohttp: aiorespons
     content = sent_kwargs[0]["content"]
     assert "[+5 more attachment(s)" in content
     assert state.attachments_skipped == 5
+
+
+# ---------------------------------------------------------------------------
+# _build_content — Discord link rewriting (S2)
+# ---------------------------------------------------------------------------
+
+
+def test_discord_links_rewritten_in_content() -> None:
+    """Discord jump links and invite links are rewritten in _build_content pipeline."""
+    state = _make_state(
+        channel_map={"ch1": "stoat_ch1", "456": "stoat_ch_mapped"},
+    )
+    msg = _make_message(
+        content=("Check https://discord.com/channels/111/456/789 and https://discord.gg/invite1"),
+    )
+    result = _build_content(msg, state)
+    # Jump link rewritten to channel mention
+    assert "<#stoat_ch_mapped>" in result
+    # Invite annotated
+    assert "[Discord invite — no longer valid]" in result
+    # Original Discord URL should not remain for the mapped link
+    assert "discord.com/channels/111/456/789" not in result

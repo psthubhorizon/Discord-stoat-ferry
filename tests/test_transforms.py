@@ -10,6 +10,7 @@ from discord_ferry.parser.transforms import (
     handle_stickers,
     remap_emoji,
     remap_mentions,
+    rewrite_discord_links,
     strip_underline,
 )
 
@@ -633,3 +634,82 @@ def test_media_discordapp_net_checked() -> None:
     }
     result, media_path = flatten_embed(embed)
     assert media_path is None  # Expired, stripped
+
+
+# ---------------------------------------------------------------------------
+# rewrite_discord_links
+# ---------------------------------------------------------------------------
+
+
+def test_jump_link_mapped_channel() -> None:
+    """Jump link with a mapped channel ID is rewritten to a Stoat channel mention."""
+    content = "Check https://discord.com/channels/111/456/789 for details"
+    result = rewrite_discord_links(content, channel_map={"456": "stoat_ch"})
+    assert "<#stoat_ch>" in result
+    assert "discord.com" not in result
+
+
+def test_jump_link_unmapped() -> None:
+    """Jump link with an unmapped channel ID gets annotation appended."""
+    content = "See https://discord.com/channels/111/456/789"
+    result = rewrite_discord_links(content, channel_map={})
+    assert "https://discord.com/channels/111/456/789 [original Discord link]" in result
+
+
+def test_jump_link_no_message_id() -> None:
+    """Jump link without a message ID (channel-only) is still matched."""
+    content = "Go to https://discord.com/channels/111/456"
+    result = rewrite_discord_links(content, channel_map={"456": "stoat_ch"})
+    assert "<#stoat_ch>" in result
+
+
+def test_legacy_discordapp_link() -> None:
+    """Legacy discordapp.com jump links are matched."""
+    content = "Old link https://discordapp.com/channels/111/456/789"
+    result = rewrite_discord_links(content, channel_map={"456": "stoat_ch"})
+    assert "<#stoat_ch>" in result
+
+
+def test_canary_ptb_links() -> None:
+    """Canary and PTB subdomain links are matched."""
+    content_canary = "https://canary.discord.com/channels/111/456/789"
+    result_canary = rewrite_discord_links(content_canary, channel_map={"456": "stoat_ch"})
+    assert "<#stoat_ch>" in result_canary
+
+    content_ptb = "https://ptb.discord.com/channels/111/456/789"
+    result_ptb = rewrite_discord_links(content_ptb, channel_map={"456": "stoat_ch"})
+    assert "<#stoat_ch>" in result_ptb
+
+
+def test_invite_annotation() -> None:
+    """discord.gg invite links get annotated as no longer valid."""
+    content = "Join us: https://discord.gg/abc123"
+    result = rewrite_discord_links(content, channel_map={})
+    assert "https://discord.gg/abc123 [Discord invite — no longer valid]" in result
+
+
+def test_invite_via_discord_com() -> None:
+    """discord.com/invite links get annotated as no longer valid."""
+    content = "Join: https://discord.com/invite/xyz"
+    result = rewrite_discord_links(content, channel_map={})
+    assert "https://discord.com/invite/xyz [Discord invite — no longer valid]" in result
+
+
+def test_link_in_code_block_untouched() -> None:
+    """Links inside code blocks are NOT rewritten."""
+    content = "```\nhttps://discord.com/channels/111/456/789\n```"
+    result = rewrite_discord_links(content, channel_map={"456": "stoat_ch"})
+    assert result == content
+
+
+def test_multiple_links() -> None:
+    """Multiple jump links and an invite link are all rewritten."""
+    content = (
+        "See https://discord.com/channels/111/456/789 and "
+        "https://discord.com/channels/111/999/100 "
+        "also https://discord.gg/invite1"
+    )
+    result = rewrite_discord_links(content, channel_map={"456": "stoat_ch1", "999": "stoat_ch2"})
+    assert "<#stoat_ch1>" in result
+    assert "<#stoat_ch2>" in result
+    assert "[Discord invite — no longer valid]" in result

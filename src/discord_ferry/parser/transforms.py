@@ -36,6 +36,13 @@ def _transform_outside_code(content: str, transform_fn: Callable[[str], str]) ->
 # Public API
 # ---------------------------------------------------------------------------
 
+_DISCORD_JUMP_LINK_RE = re.compile(
+    r"https://(canary\.|ptb\.)?discord(app)?\.com/channels/(\d+)/(\d+)(?:/(\d+))?"
+)
+_DISCORD_INVITE_RE = re.compile(
+    r"https://(discord\.gg|(canary\.|ptb\.)?discord(app)?\.com/invite)/(\w+)"
+)
+
 _SPOILER_RE = re.compile(r"\|\|(.+?)\|\|", re.DOTALL)
 _UNDERLINE_RE = re.compile(r"__([^_]+?)__")
 _USER_MENTION_RE = re.compile(r"<@!?(\d+)>")
@@ -117,6 +124,36 @@ def remap_emoji(content: str, emoji_map: dict[str, str]) -> str:
         return f"[:{name}:]"
 
     return _transform_outside_code(content, lambda s: _EMOJI_RE.sub(replace_emoji, s))
+
+
+def rewrite_discord_links(content: str, channel_map: dict[str, str]) -> str:
+    """Rewrite Discord jump links and annotate invite links.
+
+    Args:
+        content: Raw message content.
+        channel_map: Mapping of Discord channel ID -> Stoat channel ID.
+
+    Returns:
+        Content with jump links replaced by channel mentions (or annotated)
+        and invite links annotated as no longer valid.
+    """
+
+    def _replace_jump(m: re.Match[str]) -> str:
+        channel_id = m.group(4)
+        stoat_id = channel_map.get(channel_id)
+        if stoat_id:
+            return f"<#{stoat_id}>"
+        return f"{m.group(0)} [original Discord link]"
+
+    def _replace_invite(m: re.Match[str]) -> str:
+        return f"{m.group(0)} [Discord invite \u2014 no longer valid]"
+
+    def _transform(text: str) -> str:
+        text = _DISCORD_JUMP_LINK_RE.sub(_replace_jump, text)
+        text = _DISCORD_INVITE_RE.sub(_replace_invite, text)
+        return text
+
+    return _transform_outside_code(content, _transform)
 
 
 def _flush_inline_row(row: list[tuple[str, str]], parts: list[str]) -> None:
