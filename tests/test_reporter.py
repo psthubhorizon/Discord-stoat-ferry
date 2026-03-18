@@ -393,3 +393,54 @@ def test_checklist_with_emoji(tmp_path: Path) -> None:
     assert isinstance(checklist, list)
     tasks = [item["task"] for item in checklist]  # type: ignore[index]
     assert any("Verify custom emoji" in t for t in tasks)
+
+
+def test_report_includes_user_override_channels(tmp_path: Path) -> None:
+    """Report includes user_override_channels when warnings exist."""
+    from discord_ferry.discord.metadata import ChannelMeta
+
+    config = _make_config(tmp_path)
+    state = MigrationState(
+        warnings=[
+            {
+                "phase": "review",
+                "type": "user_override_skipped",
+                "message": "Channel general has 3 user-specific permission overrides",
+            },
+        ]
+    )
+    exports = [_make_export()]
+
+    # Save metadata with user overrides so report can read it
+    meta = DiscordMetadata(
+        guild_id="111",
+        fetched_at="t",
+        server_default_permissions=0,
+        role_permissions={},
+        channel_metadata={"ch1": ChannelMeta(nsfw=False)},
+        user_override_channels=[
+            {"channel_id": "ch1", "channel_name": "general", "override_count": 3},
+        ],
+    )
+    save_discord_metadata(meta, tmp_path)
+
+    report = generate_report(config, state, exports)
+
+    checklist = report["checklist"]
+    assert isinstance(checklist, list)
+    tasks = [item["task"] for item in checklist]  # type: ignore[index]
+    assert any("user-specific permission" in t.lower() for t in tasks)
+
+
+def test_report_no_user_override_checklist_when_none(tmp_path: Path) -> None:
+    """Report does not include user override checklist item when no overrides."""
+    config = _make_config(tmp_path)
+    state = MigrationState()
+    exports = [_make_export()]
+
+    report = generate_report(config, state, exports)
+
+    checklist = report["checklist"]
+    assert isinstance(checklist, list)
+    tasks = [item["task"] for item in checklist]  # type: ignore[index]
+    assert not any("user-specific permission" in t.lower() for t in tasks)

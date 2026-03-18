@@ -152,3 +152,42 @@ def test_no_warnings_when_metadata_provided() -> None:
     assert summary.has_permissions is True
     # No "No Discord token" warning
     assert not any("permissions" in w.lower() for w in summary.warnings)
+
+
+def test_user_override_count_from_metadata() -> None:
+    """ReviewSummary.user_override_count populated from metadata."""
+    exports = [_make_export()]
+    meta = DiscordMetadata(
+        guild_id="111",
+        fetched_at="t",
+        server_default_permissions=0,
+        role_permissions={},
+        channel_metadata={},
+        user_override_channels=[
+            {"channel_id": "ch1", "channel_name": "general", "override_count": 3},
+            {"channel_id": "ch2", "channel_name": "mods", "override_count": 1},
+        ],
+    )
+    summary = build_review_summary(exports, discord_metadata=meta)
+    assert summary.user_override_count == 2
+
+
+def test_user_override_count_zero_without_metadata() -> None:
+    """ReviewSummary.user_override_count is 0 when no metadata provided."""
+    exports = [_make_export()]
+    summary = build_review_summary(exports)
+    assert summary.user_override_count == 0
+
+
+def test_user_override_count_zero_when_no_overrides() -> None:
+    """ReviewSummary.user_override_count is 0 when metadata has no user overrides."""
+    exports = [_make_export()]
+    meta = DiscordMetadata(
+        guild_id="111",
+        fetched_at="t",
+        server_default_permissions=0,
+        role_permissions={},
+        channel_metadata={},
+    )
+    summary = build_review_summary(exports, discord_metadata=meta)
+    assert summary.user_override_count == 0

@@ -223,6 +223,20 @@ async def run_migration(
     if not config.dry_run and not config.resume:
         discord_meta = load_discord_metadata(config.output_dir)
         summary = build_review_summary(exports, discord_metadata=discord_meta)
+        # Log warnings for user-specific permission overrides that Stoat cannot import
+        if discord_meta and discord_meta.user_override_channels:
+            for uo in discord_meta.user_override_channels:
+                state.warnings.append(
+                    {
+                        "phase": "review",
+                        "type": "user_override_skipped",
+                        "message": (
+                            f"Channel {uo['channel_name']} has {uo['override_count']} "
+                            "user-specific permission overrides that cannot be migrated to Stoat"
+                        ),
+                    }
+                )
+
         on_event(
             MigrationEvent(
                 phase="review",
@@ -238,6 +252,7 @@ async def run_migration(
                     "threads": summary.thread_count,
                     "has_permissions": summary.has_permissions,
                     "nsfw_channels": summary.nsfw_channel_count,
+                    "user_overrides": summary.user_override_count,
                     "warnings": summary.warnings,
                 },
             )

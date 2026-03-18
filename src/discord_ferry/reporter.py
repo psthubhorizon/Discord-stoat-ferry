@@ -1,13 +1,20 @@
 """Migration report generator."""
 
+from __future__ import annotations
+
 import json
 from datetime import datetime
-from pathlib import Path
+from typing import TYPE_CHECKING
 
-from discord_ferry.config import FerryConfig
 from discord_ferry.discord.metadata import load_discord_metadata
-from discord_ferry.parser.models import DCEExport
-from discord_ferry.state import MigrationState
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+    from discord_ferry.config import FerryConfig
+    from discord_ferry.discord.metadata import DiscordMetadata
+    from discord_ferry.parser.models import DCEExport
+    from discord_ferry.state import MigrationState
 
 
 def generate_report(
@@ -72,7 +79,11 @@ def generate_report(
 
     # Build post-migration checklist
     discord_meta = load_discord_metadata(config.output_dir)
-    checklist = _build_checklist(state, has_permissions=discord_meta is not None)
+    checklist = _build_checklist(
+        state,
+        has_permissions=discord_meta is not None,
+        discord_meta=discord_meta,
+    )
     report["checklist"] = checklist
 
     _write_report(config.output_dir, report)
@@ -83,12 +94,14 @@ def generate_report(
 def _build_checklist(
     state: MigrationState,
     has_permissions: bool,
+    discord_meta: DiscordMetadata | None = None,
 ) -> list[dict[str, str]]:
     """Build a dynamic post-migration checklist of manual steps.
 
     Args:
         state: Migration state with maps and counters.
         has_permissions: Whether Discord permissions were migrated.
+        discord_meta: Optional Discord metadata for user override info.
 
     Returns:
         List of checklist items with 'task' and 'status' keys.
@@ -127,6 +140,22 @@ def _build_checklist(
         items.append(
             {
                 "task": "Set up role permissions manually (not migrated — no Discord token)",
+                "status": "todo",
+            }
+        )
+
+    # User-specific permission overrides (Stoat doesn't support these)
+    if discord_meta and discord_meta.user_override_channels:
+        count = len(discord_meta.user_override_channels)
+        names = ", ".join(str(ch["channel_name"]) for ch in discord_meta.user_override_channels[:5])
+        suffix = f" and {count - 5} more" if count > 5 else ""
+        items.append(
+            {
+                "task": (
+                    f"Re-apply user-specific permission overrides manually in {count} "
+                    f"channel(s): {names}{suffix}. Stoat only supports role-based overrides — "
+                    "use roles to replicate per-user access control."
+                ),
                 "status": "todo",
             }
         )
