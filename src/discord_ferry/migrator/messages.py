@@ -30,7 +30,7 @@ if TYPE_CHECKING:
 
     from discord_ferry.config import FerryConfig
     from discord_ferry.core.events import EventCallback
-    from discord_ferry.parser.models import DCEAuthor, DCEExport, DCEMessage
+    from discord_ferry.parser.models import DCEAuthor, DCEExport, DCEMessage, DCEReaction
     from discord_ferry.state import MigrationState
 
 # Message types that should be silently skipped without even a warning.
@@ -58,6 +58,45 @@ def _skip_attachment(
     state.attachments_skipped += 1
     state.warnings.append({"phase": phase, "type": "attachment_skipped", "message": reason})
     return f"[{reason}]"
+
+
+def _build_reaction_text(reactions: list[DCEReaction], max_chars: int) -> str:
+    """Build a text summary of reactions within a character budget.
+
+    Args:
+        reactions: Parsed reactions with emoji name and count.
+        max_chars: Maximum characters available.
+
+    Returns:
+        Formatted string like ``\\n[Reactions: thumbsup 12 · tada 5]``
+        or empty string if no reactions or no budget.
+    """
+    if not reactions or max_chars <= 0:
+        return ""
+    valid = [(r.emoji.name, r.count) for r in reactions if r.count > 0]
+    if not valid:
+        return ""
+    parts = [f"{name} {count}" for name, count in valid]
+    full = "\n[Reactions: " + " · ".join(parts) + "]"
+    if len(full) <= max_chars:
+        return full
+    # Truncate: include as many reactions as fit
+    prefix = "\n[Reactions: "
+    suffix = "...]"
+    budget = max_chars - len(prefix) - len(suffix)
+    if budget <= 0:
+        return ""
+    truncated: list[str] = []
+    used = 0
+    for part in parts:
+        addition = (" · " + part) if truncated else part
+        if used + len(addition) > budget:
+            break
+        truncated.append(part)
+        used += len(addition)
+    if not truncated:
+        return ""
+    return prefix + " · ".join(truncated) + suffix
 
 
 # ---------------------------------------------------------------------------
