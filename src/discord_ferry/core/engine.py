@@ -24,7 +24,7 @@ from discord_ferry.exporter import (
     run_dce_export,
     validate_discord_token,
 )
-from discord_ferry.migrator.api import api_fetch_server, get_session
+from discord_ferry.migrator.api import api_fetch_server, get_session, init_request_semaphore
 from discord_ferry.migrator.avatars import run_avatars
 from discord_ferry.migrator.connect import run_connect
 from discord_ferry.migrator.emoji import run_emoji
@@ -303,6 +303,8 @@ async def run_migration(
 
     # Phases 2-10: run in order, skipping as appropriate
     runnable_phases = [p for p in PHASE_ORDER if p not in ("export", "validate", "report")]
+
+    init_request_semaphore(config.max_concurrent_requests)
 
     async with aiohttp.ClientSession() as session:
         config.session = session

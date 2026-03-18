@@ -1244,3 +1244,19 @@ async def test_filtered_threads_logged_to_warnings(tmp_path: Path) -> None:
     assert "low-activity" in w["message"]
     assert "2 messages" in w["message"]
     assert "< 5 threshold" in w["message"]
+
+
+# ---------------------------------------------------------------------------
+# Semaphore initialization
+# ---------------------------------------------------------------------------
+
+
+async def test_semaphore_initialized_during_migration(tmp_path: Path) -> None:
+    """run_migration calls init_request_semaphore with max_concurrent_requests."""
+    events: list[MigrationEvent] = []
+    config = _make_config(tmp_path, max_concurrent_requests=7)
+
+    with patch("discord_ferry.core.engine.init_request_semaphore") as mock_init:
+        await run_migration(config, events.append, phase_overrides=_NOOP_OVERRIDES)
+
+    mock_init.assert_called_once_with(7)

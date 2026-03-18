@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+import random
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 import aiohttp  # noqa: TCH002
@@ -15,8 +18,34 @@ if TYPE_CHECKING:
 
     from discord_ferry.config import FerryConfig
 
+logger = logging.getLogger(__name__)
+
 MAX_API_RETRIES = 3
 _RETRYABLE_STATUSES = {429, 502, 503, 504}
+
+_CIRCUIT_THRESHOLD = 5
+_CIRCUIT_PAUSE_SECONDS = 30
+
+
+@dataclass
+class _CircuitState:
+    consecutive_failures: int = 0
+
+
+# Module-level state — safe for single-migration-per-process model.
+_circuit_state = _CircuitState()
+_request_semaphore: asyncio.Semaphore | None = None
+
+
+def _reset_circuit_state() -> None:
+    """Reset circuit breaker state. Called by test fixtures."""
+    _circuit_state.consecutive_failures = 0
+
+
+def init_request_semaphore(max_concurrent: int = 5) -> None:
+    """Initialize the request concurrency semaphore."""
+    global _request_semaphore  # noqa: PLW0603
+    _request_semaphore = asyncio.Semaphore(max(max_concurrent, 1))
 
 
 @asynccontextmanager
@@ -44,6 +73,10 @@ async def _api_request(
 ) -> dict[str, Any]:
     """Make an authenticated API request with retry on 429/5xx.
 
+    Delegates to :func:`_api_request_inner` for the actual work, optionally
+    wrapping the call with the concurrency semaphore when one has been
+    initialised via :func:`init_request_semaphore`.
+
     Args:
         session: An active aiohttp ClientSession.
         method: HTTP method string (GET, POST, PATCH, etc.).
@@ -58,43 +91,83 @@ async def _api_request(
     Raises:
         MigrationError: On non-retryable errors or when all retries are exhausted.
     """
+    if _request_semaphore is not None:
+        async with _request_semaphore:
+            return await _api_request_inner(
+                session, method, url, token, json_data, extra_headers=extra_headers
+            )
+    return await _api_request_inner(
+        session, method, url, token, json_data, extra_headers=extra_headers
+    )
+
+
+async def _api_request_inner(
+    session: aiohttp.ClientSession,
+    method: str,
+    url: str,
+    token: str,
+    json_data: dict[str, Any] | None = None,
+    *,
+    extra_headers: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    """Core request logic with exponential backoff and circuit breaker."""
     headers = _headers(token)
     if extra_headers:
         headers.update(extra_headers)
     # Don't send a JSON body for GET requests even if one is accidentally provided.
     body = json_data if method.upper() != "GET" else None
 
+    # Circuit breaker check: pause and reset if too many consecutive failures.
+    if _circuit_state.consecutive_failures >= _CIRCUIT_THRESHOLD:
+        logger.warning(
+            "Circuit breaker open: %d consecutive failures. Pausing %ds.",
+            _circuit_state.consecutive_failures,
+            _CIRCUIT_PAUSE_SECONDS,
+        )
+        await asyncio.sleep(_CIRCUIT_PAUSE_SECONDS)
+        _circuit_state.consecutive_failures = 0
+
     for attempt in range(MAX_API_RETRIES):
         try:
             async with session.request(method, url, json=body, headers=headers) as resp:
                 if resp.status in (200, 201):
+                    _circuit_state.consecutive_failures = 0
                     return await resp.json()  # type: ignore[no-any-return]
                 if resp.status == 204:
+                    _circuit_state.consecutive_failures = 0
                     return {}
 
                 if resp.status in _RETRYABLE_STATUSES:
                     if attempt == MAX_API_RETRIES - 1:
                         text = await resp.text()
+                        _circuit_state.consecutive_failures += 1
                         raise MigrationError(
                             f"API request failed after {MAX_API_RETRIES} retries: "
                             f"{resp.status} {text}"
                         )
                     if resp.status == 429:
+                        # Rate-limited — NOT a circuit-breaker failure.
                         body_data: dict[str, Any] = await resp.json()
                         retry_ms = body_data.get("retry_after", 1000)
                         await asyncio.sleep(retry_ms / 1000)
                     else:
-                        await asyncio.sleep(2)
+                        # 5xx — exponential backoff with jitter.
+                        delay = min(2**attempt, 60) + random.uniform(0.1, 0.5)
+                        await asyncio.sleep(delay)
+                        _circuit_state.consecutive_failures += 1
                     continue
 
                 text = await resp.text()
                 raise MigrationError(f"API error {resp.status}: {text}")
         except aiohttp.ClientError as exc:
             if attempt == MAX_API_RETRIES - 1:
+                _circuit_state.consecutive_failures += 1
                 raise MigrationError(
                     f"Network error after {MAX_API_RETRIES} retries: {exc}"
                 ) from exc
-            await asyncio.sleep(2)
+            delay = min(2**attempt, 60) + random.uniform(0.1, 0.5)
+            await asyncio.sleep(delay)
+            _circuit_state.consecutive_failures += 1
 
     # Unreachable, but satisfies mypy.
     raise MigrationError(f"API request failed after {MAX_API_RETRIES} retries")
