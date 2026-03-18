@@ -66,14 +66,14 @@ async def fetch_and_translate_guild_metadata(
             if ow.id == guild_id:  # @everyone channel override → default_override
                 default_override = PermissionPair(
                     allow=translate_permissions(ow.allow),
-                    deny=translate_permissions(ow.deny),
+                    deny=translate_permissions(ow.deny, is_deny=True),
                 )
             else:
                 role_overrides.append(
                     RoleOverride(
                         discord_role_id=ow.id,
                         allow=translate_permissions(ow.allow),
-                        deny=translate_permissions(ow.deny),
+                        deny=translate_permissions(ow.deny, is_deny=True),
                     )
                 )
         channel_metadata[channel.id] = ChannelMeta(
