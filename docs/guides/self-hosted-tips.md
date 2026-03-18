@@ -64,6 +64,16 @@ Autumn supports two storage backends:
 
 For migrations with 10+ GB of media, an S3-compatible backend is recommended. Check the Stoat self-hosting documentation for Autumn configuration details.
 
+Server banners are automatically migrated when a Discord token is provided. The banner is downloaded from Discord's CDN and uploaded to Autumn (6MB limit).
+
+---
+
+## Performance Tuning
+
+For powerful self-hosted instances, you can increase `max_concurrent_requests` (default 5) to allow more parallel API calls. The circuit breaker (5 consecutive failures → 30s pause) provides safety regardless of concurrency level.
+
+This option is available in the migration engine but not yet exposed as a CLI flag. See the [Engine Configuration](cli-reference.md#engine-configuration) section in the CLI reference.
+
 ---
 
 ## Ferry GUI Storage Secret

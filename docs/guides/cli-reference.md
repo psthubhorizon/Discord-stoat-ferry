@@ -100,6 +100,21 @@ STOAT_TOKEN=your_stoat_token_here
 
 ---
 
+### Engine Configuration
+
+These options are available in the migration engine but not yet exposed as CLI flags. They can be set programmatically or will be added as CLI options in a future release:
+
+| Config Field | Default | Description |
+|---|---|---|
+| `checkpoint_interval` | 50 | State save frequency (every N messages) |
+| `skip_avatars` | False | Skip avatar pre-flight phase |
+| `reaction_mode` | "text" | Reaction strategy: "text", "native", or "skip" |
+| `min_thread_messages` | 0 | Exclude threads below this message count |
+| `validate_after` | False | Run post-migration validation |
+| `max_concurrent_requests` | 5 | API concurrency limit |
+
+---
+
 ## Exit Codes
 
 | Code | Meaning |
