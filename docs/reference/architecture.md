@@ -54,6 +54,7 @@ src/discord_ferry/
 │   ├── connect.py           # Phase 2: CONNECT — test credentials, discover Autumn URL
 │   ├── structure.py         # Phases 3–6: SERVER, ROLES, CATEGORIES, CHANNELS
 │   ├── emoji.py             # Phase 7: EMOJI — extract, upload, register
+│   ├── avatars.py           # Phase 7.5: AVATARS — pre-flight avatar download + Autumn upload
 │   ├── messages.py          # Phase 8: MESSAGES — 9-step per-message pipeline
 │   ├── reactions.py         # Phase 9: REACTIONS — apply queued reactions
 │   └── pins.py              # Phase 10: PINS — re-pin messages
@@ -95,6 +96,7 @@ cli.py ──────┘         │
                        ├──→ migrator/connect.py
                        ├──→ migrator/structure.py ──→ migrator/api.py
                        ├──→ migrator/emoji.py ─────→ migrator/api.py, uploader/
+                       ├──→ migrator/avatars.py ───→ uploader/
                        ├──→ migrator/messages.py ──→ migrator/api.py, uploader/, parser/transforms
                        ├──→ migrator/reactions.py ─→ migrator/api.py
                        ├──→ migrator/pins.py ──────→ migrator/api.py
@@ -137,6 +139,12 @@ class FerryConfig:
     verbose: bool                    # Extra logging for CLI
     max_channels: int                # Stoat channel limit (default 200)
     max_emoji: int                   # Stoat emoji limit (default 100)
+    checkpoint_interval: int         # State save frequency during messages (default 50, min 1, throttled max 1/5s)
+    skip_avatars: bool               # Skip the avatar pre-flight phase (default False)
+    reaction_mode: str               # "text" (default), "native" (Phase 9 API), or "skip"
+    min_thread_messages: int         # Filter threads below this count (0 = include all)
+    validate_after: bool             # Run post-migration validation phase (default False)
+    max_concurrent_requests: int     # asyncio.Semaphore bound for API requests (default 5, min 1)
 
     # Discord API (orchestrated mode only)
     discord_token: str | None        # Discord user token (repr=False)
@@ -174,6 +182,16 @@ class MigrationState:
     # Deferred operations (collected during MESSAGES, applied in later phases)
     pending_pins: list[tuple[str, str]]         # (stoat_channel_id, stoat_message_id)
     pending_reactions: list[dict[str, str]]      # {channel_id, message_id, emoji}
+
+    # Dead-letter queue (messages that failed after retries)
+    failed_messages: list[FailedMessage]  # discord_msg_id, stoat_channel_id, error, retry_count, content_preview
+
+    # Autumn upload tracking (for orphan detection and resume)
+    autumn_uploads: dict[str, str]        # Autumn file_id → source_id
+    referenced_autumn_ids: set[str]       # Autumn IDs confirmed used in sent messages (serialised as list)
+
+    # Post-migration validation results
+    validation_results: dict[str, object] # Channel/role count comparisons from VALIDATE MIGRATION phase
 
     # Logs (structured dicts with phase, type, and message)
     errors: list[dict[str, str]]
@@ -265,7 +283,7 @@ produced by earlier phases.
 ```
 EXPORT → VALIDATE → CONNECT → SERVER → ROLES → CATEGORIES → CHANNELS
                                                                  ↓
-                     REPORT ← PINS ← REACTIONS ← MESSAGES ← EMOJI
+  VALIDATE MIGRATION ← REPORT ← PINS ← REACTIONS ← MESSAGES ← EMOJI → AVATARS
 ```
 
 | # | Phase | Module | Reads | Writes | API Calls |
@@ -278,16 +296,18 @@ EXPORT → VALIDATE → CONNECT → SERVER → ROLES → CATEGORIES → CHANNELS
 | 5 | **CATEGORIES** | `migrator/structure.py` | exports | category_map | `PATCH /servers/:id` |
 | 6 | **CHANNELS** | `migrator/structure.py` | exports, discord_metadata | channel_map | `POST /servers/:id/channels`, permission PUTs |
 | 7 | **EMOJI** | `migrator/emoji.py` | message content + reactions | emoji_map | Autumn upload + `PUT /servers/:id/emoji/:id` |
+| 7.5 | **AVATARS** | `migrator/avatars.py` | all exports (unique authors) | avatar_cache | Autumn upload |
 | 8 | **MESSAGES** | `migrator/messages.py` | all messages | message_map, pending_pins/reactions | `POST /channels/:id/messages`, Autumn uploads |
 | 9 | **REACTIONS** | `migrator/reactions.py` | pending_reactions | reactions_applied | `PUT /channels/:id/messages/:id/reactions` |
 | 10 | **PINS** | `migrator/pins.py` | pending_pins | pins_applied | `PUT /channels/:id/messages/:id/pin` |
 | 11 | **REPORT** | `reporter.py` | state | migration_report.json | None |
+| 12 | **VALIDATE MIGRATION** | inline in `engine.py` | state, config | validation_results | `GET /servers/:id` |
 
 ### Phase Skip Logic
 
 Phases can be skipped in three ways:
 
-1. **Config flags**: `skip_messages`, `skip_emoji`, `skip_reactions`, `skip_threads`, `skip_export`
+1. **Config flags**: `skip_messages`, `skip_emoji`, `skip_reactions`, `skip_threads`, `skip_export`, `skip_avatars`; `reaction_mode="skip"` for REACTIONS; `validate_after=False` (default) for VALIDATE MIGRATION
 2. **Resume**: If `state.current_phase` index > phase index, the phase was already completed
 3. **Mode**: EXPORT phase is skipped entirely in offline mode (no Discord token)
 
@@ -339,6 +359,13 @@ content (`<:name:ID>`) and reactions. Deduplicates by ID. Downloads each emoji i
 to Autumn with tag `emojis`, creates on server. 2.0s delay between creates (shares the 5/10s
 `/servers` rate bucket). Populates `state.emoji_map`.
 
+**AVATARS** (Phase 7.5): Pre-flight avatar download and upload. `run_avatars()` in
+`migrator/avatars.py` scans all exports for unique authors, downloads each author's avatar
+(local file or remote URL), uploads to Autumn with the `avatars` tag, and populates
+`state.avatar_cache` (user ID → Autumn file ID). This front-loads all avatar uploads before
+the MESSAGES phase begins, so message sends never block on avatar I/O. Skippable via
+`skip_avatars` config flag. Added in v1.5.0.
+
 **MESSAGES** (Phase 8): The largest phase. Processes channels sorted by Discord Snowflake ID
 (deterministic). Per channel, streams or iterates messages oldest-first. Per message:
 
@@ -352,8 +379,8 @@ to Autumn with tag `emojis`, creates on server. 2.0s delay between creates (shar
 8. Build masquerade (author name + avatar + colour)
 9. Send via `api_send_message` with `Idempotency-Key` header `ferry-{discord_msg_id}`
 
-Collects `pending_reactions` for Phase 9. Saves state every 50 messages and after each
-channel completes.
+Collects `pending_reactions` for Phase 9. Saves state every `checkpoint_interval` messages
+(default 50, time-throttled to at most once per 5 seconds) and after each channel completes.
 
 **REACTIONS** (Phase 9): Iterates `state.pending_reactions`. Calls `api_add_reaction` for each.
 Enforces the 20-reactions-per-message Stoat limit. Fire-and-forget error handling (failures
@@ -365,6 +392,11 @@ Fire-and-forget error handling.
 **REPORT** (Phase 11): Runs inline. Calls `generate_report()` which writes
 `migration_report.json` containing summary counts, ID maps, timing, warnings, errors, and a
 dynamic post-migration checklist.
+
+**VALIDATE MIGRATION** (Phase 12, optional): Runs inline in `engine.py` only when
+`validate_after=True`. Queries the Stoat server via `api_fetch_server()` and compares
+channel/role counts against state maps. Reports discrepancies (missing channels, extra roles,
+etc.) in `state.validation_results`. Does not modify any data on the server. Added in v1.6.0.
 
 ---
 
