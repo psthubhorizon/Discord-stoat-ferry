@@ -1039,7 +1039,7 @@ def _write_thread_json(
     *,
     parent_channel: str = "general",
     thread_name: str = "my-thread",
-    thread_id: str = "t1",
+    thread_id: str = "900000000000000001",
     message_count: int = 3,
 ) -> Path:
     """Write a DCE JSON file with a three-segment (thread) filename."""
@@ -1069,7 +1069,7 @@ def _write_channel_json(
     export_dir: Path,
     *,
     channel_name: str = "general",
-    channel_id: str = "ch1",
+    channel_id: str = "800000000000000001",
     message_count: int = 10,
 ) -> Path:
     """Write a DCE JSON file with a two-segment (regular channel) filename."""
@@ -1100,12 +1100,14 @@ async def test_thread_below_threshold_excluded(tmp_path: Path) -> None:
     export_dir.mkdir()
     output_dir = tmp_path / "output"
 
-    _write_channel_json(export_dir, channel_name="general", channel_id="ch1", message_count=20)
+    _write_channel_json(
+        export_dir, channel_name="general", channel_id="800000000000000001", message_count=20
+    )
     _write_thread_json(
         export_dir,
         parent_channel="general",
         thread_name="small-thread",
-        thread_id="t1",
+        thread_id="900000000000000001",
         message_count=3,
     )
 
@@ -1141,7 +1143,9 @@ async def test_regular_channel_never_filtered(tmp_path: Path) -> None:
     output_dir = tmp_path / "output"
 
     # Regular channel with only 1 message — should NOT be filtered even with high threshold
-    _write_channel_json(export_dir, channel_name="quiet", channel_id="ch1", message_count=1)
+    _write_channel_json(
+        export_dir, channel_name="quiet", channel_id="800000000000000002", message_count=1
+    )
 
     events: list[MigrationEvent] = []
     config = _make_config(
@@ -1172,12 +1176,14 @@ async def test_min_thread_messages_zero_includes_all(tmp_path: Path) -> None:
     export_dir.mkdir()
     output_dir = tmp_path / "output"
 
-    _write_channel_json(export_dir, channel_name="general", channel_id="ch1", message_count=10)
+    _write_channel_json(
+        export_dir, channel_name="general", channel_id="800000000000000003", message_count=10
+    )
     _write_thread_json(
         export_dir,
         parent_channel="general",
         thread_name="tiny-thread",
-        thread_id="t1",
+        thread_id="900000000000000002",
         message_count=1,
     )
 
@@ -1187,7 +1193,7 @@ async def test_min_thread_messages_zero_includes_all(tmp_path: Path) -> None:
         export_dir=export_dir,
         min_thread_messages=0,
     )
-    state = await run_migration(config, events.append, phase_overrides=_NOOP_OVERRIDES)
+    await run_migration(config, events.append, phase_overrides=_NOOP_OVERRIDES)
 
     # No filtering warnings
     filter_warnings = [
@@ -1211,12 +1217,14 @@ async def test_filtered_threads_logged_to_warnings(tmp_path: Path) -> None:
     export_dir.mkdir()
     output_dir = tmp_path / "output"
 
-    _write_channel_json(export_dir, channel_name="general", channel_id="ch1", message_count=10)
+    _write_channel_json(
+        export_dir, channel_name="general", channel_id="800000000000000004", message_count=10
+    )
     _write_thread_json(
         export_dir,
         parent_channel="general",
         thread_name="low-activity",
-        thread_id="t1",
+        thread_id="900000000000000003",
         message_count=2,
     )
 
