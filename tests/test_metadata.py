@@ -137,7 +137,10 @@ async def test_everyone_deny_view_channel_produces_stoat_deny_bit() -> None:
         },
     ]
 
+    mock_guild = {"id": _GUILD_ID, "name": "Test", "banner": None}
+
     with aioresponses() as m:
+        m.get(f"{_DISCORD_API}/guilds/{_GUILD_ID}", payload=mock_guild)
         m.get(f"{_DISCORD_API}/guilds/{_GUILD_ID}/roles", payload=mock_roles)
         m.get(f"{_DISCORD_API}/guilds/{_GUILD_ID}/channels", payload=mock_channels)
 
@@ -247,7 +250,13 @@ async def test_user_overrides_counted_in_fetch() -> None:
         },
     ]
 
+    mock_guild = {"id": guild_id, "name": "Test", "banner": None}
+
     with aioresponses() as m:
+        m.get(
+            f"https://discord.com/api/v10/guilds/{guild_id}",
+            payload=mock_guild,
+        )
         m.get(
             f"https://discord.com/api/v10/guilds/{guild_id}/roles",
             payload=mock_roles,
@@ -264,3 +273,77 @@ async def test_user_overrides_counted_in_fetch() -> None:
     assert meta.user_override_channels[0]["channel_id"] == "ch1"
     assert meta.user_override_channels[0]["channel_name"] == "general"
     assert meta.user_override_channels[0]["override_count"] == 2
+
+
+async def test_banner_hash_extracted() -> None:
+    """fetch_and_translate_guild_metadata extracts banner hash from guild data."""
+    from aioresponses import aioresponses
+
+    guild_id = "999000000000000001"
+
+    mock_guild = {
+        "id": guild_id,
+        "name": "Test Guild",
+        "banner": "abc123",
+    }
+
+    mock_roles = [
+        {
+            "id": guild_id,
+            "name": "@everyone",
+            "permissions": "0",
+            "position": 0,
+            "color": 0,
+            "hoist": False,
+            "managed": False,
+        },
+    ]
+
+    mock_channels: list[dict[str, object]] = []
+
+    with aioresponses() as m:
+        m.get(f"{_DISCORD_API}/guilds/{guild_id}", payload=mock_guild)
+        m.get(f"{_DISCORD_API}/guilds/{guild_id}/roles", payload=mock_roles)
+        m.get(f"{_DISCORD_API}/guilds/{guild_id}/channels", payload=mock_channels)
+
+        async with aiohttp.ClientSession() as session:
+            meta = await fetch_and_translate_guild_metadata(session, "test-token", guild_id)
+
+    assert meta.banner_hash == "abc123"
+
+
+async def test_no_banner_hash() -> None:
+    """fetch_and_translate_guild_metadata returns empty banner_hash when guild has no banner."""
+    from aioresponses import aioresponses
+
+    guild_id = "999000000000000001"
+
+    mock_guild = {
+        "id": guild_id,
+        "name": "Test Guild",
+        "banner": None,
+    }
+
+    mock_roles = [
+        {
+            "id": guild_id,
+            "name": "@everyone",
+            "permissions": "0",
+            "position": 0,
+            "color": 0,
+            "hoist": False,
+            "managed": False,
+        },
+    ]
+
+    mock_channels: list[dict[str, object]] = []
+
+    with aioresponses() as m:
+        m.get(f"{_DISCORD_API}/guilds/{guild_id}", payload=mock_guild)
+        m.get(f"{_DISCORD_API}/guilds/{guild_id}/roles", payload=mock_roles)
+        m.get(f"{_DISCORD_API}/guilds/{guild_id}/channels", payload=mock_channels)
+
+        async with aiohttp.ClientSession() as session:
+            meta = await fetch_and_translate_guild_metadata(session, "test-token", guild_id)
+
+    assert meta.banner_hash == ""

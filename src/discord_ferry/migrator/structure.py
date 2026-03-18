@@ -190,6 +190,61 @@ async def run_server(
                             )
                         )
 
+        # Upload and apply server banner if available from Discord metadata.
+        discord_meta = load_discord_metadata(config.output_dir)
+        if discord_meta and discord_meta.banner_hash:
+            guild_id = discord_meta.guild_id
+            banner_url = (
+                f"https://cdn.discordapp.com/banners/{guild_id}/"
+                f"{discord_meta.banner_hash}.png?size=1024"
+            )
+            try:
+                banner_dir = config.output_dir / "banners"
+                banner_dir.mkdir(parents=True, exist_ok=True)
+                banner_path = banner_dir / f"{guild_id}.png"
+                async with session.get(banner_url) as resp:
+                    if resp.status == 200:
+                        banner_path.write_bytes(await resp.read())
+                        banner_id = await upload_with_cache(
+                            session,
+                            state.autumn_url,
+                            "banners",
+                            banner_path,
+                            config.token,
+                            state.upload_cache,
+                            config.upload_delay,
+                        )
+                        await api_edit_server(
+                            session,
+                            config.stoat_url,
+                            config.token,
+                            state.stoat_server_id,
+                            banner=banner_id,
+                        )
+                        on_event(
+                            MigrationEvent(
+                                phase="server",
+                                status="progress",
+                                message="Applied server banner",
+                            )
+                        )
+                    else:
+                        state.warnings.append(
+                            {
+                                "phase": "server",
+                                "type": "banner_download_failed",
+                                "message": f"Banner download returned status {resp.status}",
+                            }
+                        )
+            except Exception as exc:  # noqa: BLE001
+                state.warnings.append(
+                    {
+                        "phase": "server",
+                        "type": "banner_upload_failed",
+                        "message": f"Banner migration failed: {exc}",
+                    }
+                )
+
         # Bootstrap minimum permissions on the server's default role.
         try:
             await api_edit_server(

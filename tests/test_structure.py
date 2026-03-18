@@ -1149,3 +1149,118 @@ async def test_run_channels_truncates_at_200(tmp_path: Path) -> None:
     # Warning emitted.
     warning_events = [e for e in events if e.status == "warning"]
     assert any("205" in e.message for e in warning_events)
+
+
+# ---------------------------------------------------------------------------
+# SERVER banner migration (S7)
+# ---------------------------------------------------------------------------
+
+BANNER_CDN = "https://cdn.discordapp.com/banners"
+
+
+async def test_banner_uploaded_and_applied(tmp_path: Path) -> None:
+    """SERVER phase downloads Discord banner, uploads to Autumn, and applies to Stoat server."""
+    events: list[MigrationEvent] = []
+    config = _make_config(tmp_path)
+    state = MigrationState(autumn_url=AUTUMN_URL)
+    exports = [_make_export(guild_id="111")]
+
+    # Save discord metadata with a banner hash.
+    meta = DiscordMetadata(
+        guild_id="111",
+        fetched_at="t",
+        server_default_permissions=0,
+        role_permissions={},
+        channel_metadata={},
+        banner_hash="abc123banner",
+    )
+    save_discord_metadata(meta, tmp_path)
+
+    patch_bodies: list[dict[str, object]] = []
+
+    with aioresponses() as m:
+        m.post(f"{STOAT_URL}/servers/create", payload={"_id": "srv1", "name": "Test"})
+        # CDN banner download.
+        m.get(
+            f"{BANNER_CDN}/111/abc123banner.png?size=1024",
+            body=b"FAKEPNG",
+        )
+        # Autumn banner upload.
+        m.post(f"{AUTUMN_URL}/banners", payload={"id": "autumn-banner-id"})
+        # PATCH to apply banner.
+        m.patch(
+            f"{STOAT_URL}/servers/srv1",
+            payload={"_id": "srv1"},
+            callback=lambda url, **kwargs: patch_bodies.append(  # type: ignore[misc]
+                kwargs.get("json", {})
+            ),
+        )
+
+        await run_server(config, state, exports, events.append)
+
+    assert state.stoat_server_id == "srv1"
+    messages = _collect_events(events)
+    assert any("banner" in msg.lower() for msg in messages)
+    # Verify PATCH was called with banner field.
+    assert any(b.get("banner") == "autumn-banner-id" for b in patch_bodies)
+
+
+async def test_banner_download_fails_graceful(tmp_path: Path) -> None:
+    """SERVER phase logs a warning when banner CDN download returns non-200."""
+    events: list[MigrationEvent] = []
+    config = _make_config(tmp_path)
+    state = MigrationState(autumn_url=AUTUMN_URL)
+    exports = [_make_export(guild_id="111")]
+
+    meta = DiscordMetadata(
+        guild_id="111",
+        fetched_at="t",
+        server_default_permissions=0,
+        role_permissions={},
+        channel_metadata={},
+        banner_hash="abc123banner",
+    )
+    save_discord_metadata(meta, tmp_path)
+
+    with aioresponses() as m:
+        m.post(f"{STOAT_URL}/servers/create", payload={"_id": "srv1", "name": "Test"})
+        # CDN returns 404.
+        m.get(
+            f"{BANNER_CDN}/111/abc123banner.png?size=1024",
+            status=404,
+        )
+
+        await run_server(config, state, exports, events.append)
+
+    assert state.stoat_server_id == "srv1"
+    banner_warnings = [w for w in state.warnings if w.get("type") == "banner_download_failed"]
+    assert len(banner_warnings) == 1
+    assert "404" in banner_warnings[0]["message"]
+
+
+async def test_no_banner_skipped(tmp_path: Path) -> None:
+    """SERVER phase skips banner download when no banner hash in metadata."""
+    events: list[MigrationEvent] = []
+    config = _make_config(tmp_path)
+    state = MigrationState(autumn_url=AUTUMN_URL)
+    exports = [_make_export(guild_id="111")]
+
+    # Save metadata without banner hash (empty string default).
+    meta = DiscordMetadata(
+        guild_id="111",
+        fetched_at="t",
+        server_default_permissions=0,
+        role_permissions={},
+        channel_metadata={},
+    )
+    save_discord_metadata(meta, tmp_path)
+
+    with aioresponses() as m:
+        m.post(f"{STOAT_URL}/servers/create", payload={"_id": "srv1", "name": "Test"})
+        # No CDN mock — if banner download were attempted, aioresponses would raise.
+
+        await run_server(config, state, exports, events.append)
+
+    assert state.stoat_server_id == "srv1"
+    messages = _collect_events(events)
+    assert not any("banner" in msg.lower() for msg in messages)

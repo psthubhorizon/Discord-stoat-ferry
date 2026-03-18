@@ -393,6 +393,10 @@ async def test_discord_metadata_fetched_when_token_provided(tmp_path: Path) -> N
 
     with aioresponses() as m:
         m.get(
+            f"{_DISCORD_API}/guilds/{_GUILD_ID}",
+            payload={"id": _GUILD_ID, "name": "Test", "banner": None},
+        )
+        m.get(
             f"{_DISCORD_API}/guilds/{_GUILD_ID}/roles",
             payload=_MOCK_ROLES,
         )
@@ -579,6 +583,10 @@ async def test_discord_metadata_fetch_runs_with_skip_export(tmp_path: Path) -> N
     )
 
     with aioresponses() as m:
+        m.get(
+            f"{_DISCORD_API}/guilds/{_GUILD_ID}",
+            payload={"id": _GUILD_ID, "name": "Test", "banner": None},
+        )
         m.get(
             f"{_DISCORD_API}/guilds/{_GUILD_ID}/roles",
             payload=_MOCK_ROLES,

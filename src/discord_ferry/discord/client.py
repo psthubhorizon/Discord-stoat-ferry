@@ -14,6 +14,24 @@ DISCORD_API = "https://discord.com/api/v10"
 _MAX_RETRIES = 3
 
 
+async def fetch_guild(session: aiohttp.ClientSession, token: str, guild_id: str) -> dict[str, Any]:
+    """Fetch the guild object from the Discord API.
+
+    Args:
+        session: An active aiohttp ClientSession.
+        token: Discord user token (no "Bot " prefix).
+        guild_id: Discord guild/server ID.
+
+    Returns:
+        Raw guild data dict.
+
+    Raises:
+        DiscordAuthError: On 401 Unauthorized.
+        MigrationError: On other non-retryable errors.
+    """
+    return await _discord_get_object(session, token, f"/guilds/{guild_id}")
+
+
 async def fetch_guild_roles(
     session: aiohttp.ClientSession, token: str, guild_id: str
 ) -> list[DiscordRole]:
@@ -60,6 +78,42 @@ async def _discord_get(
     session: aiohttp.ClientSession, token: str, path: str
 ) -> list[dict[str, Any]]:
     """Make an authenticated GET request to the Discord API with retry on 429."""
+    url = f"{DISCORD_API}{path}"
+    headers = {"Authorization": token, "Content-Type": "application/json"}
+
+    for attempt in range(_MAX_RETRIES):
+        try:
+            async with session.get(url, headers=headers) as resp:
+                if resp.status == 200:
+                    return await resp.json()  # type: ignore[no-any-return]
+                if resp.status == 401:
+                    raise DiscordAuthError("Discord token is invalid or expired")
+                if resp.status == 403:
+                    raise MigrationError(
+                        "Insufficient permissions to read guild metadata. "
+                        "The token must belong to a member of the guild."
+                    )
+                if resp.status == 429:
+                    body = await resp.json()
+                    retry_after = float(body.get("retry_after", 1))
+                    await asyncio.sleep(retry_after)
+                    continue
+                text = await resp.text()
+                raise MigrationError(f"Discord API error {resp.status}: {text}")
+        except (DiscordAuthError, MigrationError):
+            raise
+        except aiohttp.ClientError as exc:
+            if attempt == _MAX_RETRIES - 1:
+                raise MigrationError(f"Discord API network error: {exc}") from exc
+            await asyncio.sleep(1)
+
+    raise MigrationError(f"Discord API request failed after {_MAX_RETRIES} retries")
+
+
+async def _discord_get_object(
+    session: aiohttp.ClientSession, token: str, path: str
+) -> dict[str, Any]:
+    """Make an authenticated GET request returning a single JSON object."""
     url = f"{DISCORD_API}{path}"
     headers = {"Authorization": token, "Content-Type": "application/json"}
 

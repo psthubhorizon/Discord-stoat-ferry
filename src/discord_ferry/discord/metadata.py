@@ -42,6 +42,7 @@ class DiscordMetadata:
     role_permissions: dict[str, PermissionPair]
     channel_metadata: dict[str, ChannelMeta]
     user_override_channels: list[dict[str, object]] = field(default_factory=list)
+    banner_hash: str = ""
 
 
 def save_discord_metadata(meta: DiscordMetadata, output_dir: Path) -> None:
@@ -73,6 +74,7 @@ def _meta_to_dict(meta: DiscordMetadata) -> dict[str, Any]:
         },
         "channel_metadata": {k: _channel_meta_to_dict(v) for k, v in meta.channel_metadata.items()},
         "user_override_channels": meta.user_override_channels,
+        "banner_hash": meta.banner_hash,
     }
 
 
@@ -107,6 +109,7 @@ def _dict_to_meta(data: dict[str, Any]) -> DiscordMetadata:
             k: _dict_to_channel_meta(v) for k, v in data.get("channel_metadata", {}).items()
         },
         user_override_channels=data.get("user_override_channels", []),
+        banner_hash=data.get("banner_hash", ""),
     )
 
 

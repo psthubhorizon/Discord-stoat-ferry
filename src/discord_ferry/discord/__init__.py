@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
-from discord_ferry.discord.client import fetch_guild_channels, fetch_guild_roles
+from discord_ferry.discord.client import fetch_guild, fetch_guild_channels, fetch_guild_roles
 from discord_ferry.discord.metadata import (
     ChannelMeta,
     DiscordMetadata,
@@ -40,6 +40,9 @@ async def fetch_and_translate_guild_metadata(
     Returns:
         DiscordMetadata with all permissions translated to Stoat bit space.
     """
+    guild_data = await fetch_guild(session, token, guild_id)
+    banner_hash = str(guild_data.get("banner") or "")
+
     roles = await fetch_guild_roles(session, token, guild_id)
     channels = await fetch_guild_channels(session, token, guild_id)
 
@@ -100,4 +103,5 @@ async def fetch_and_translate_guild_metadata(
         role_permissions=role_permissions,
         channel_metadata=channel_metadata,
         user_override_channels=user_override_channels,
+        banner_hash=banner_hash,
     )
