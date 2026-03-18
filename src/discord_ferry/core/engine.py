@@ -24,15 +24,16 @@ from discord_ferry.exporter import (
     run_dce_export,
     validate_discord_token,
 )
+from discord_ferry.migrator.api import get_session
 from discord_ferry.migrator.avatars import run_avatars
 from discord_ferry.migrator.connect import run_connect
 from discord_ferry.migrator.emoji import run_emoji
-from discord_ferry.migrator.messages import run_messages
+from discord_ferry.migrator.messages import _process_message, run_messages
 from discord_ferry.migrator.pins import run_pins
 from discord_ferry.migrator.reactions import run_reactions
 from discord_ferry.migrator.structure import run_categories, run_channels, run_roles, run_server
-from discord_ferry.parser.dce_parser import parse_export_directory, validate_export
-from discord_ferry.parser.models import DCEExport
+from discord_ferry.parser.dce_parser import parse_export_directory, stream_messages, validate_export
+from discord_ferry.parser.models import DCEExport, DCEMessage
 from discord_ferry.reporter import generate_report
 from discord_ferry.review import build_review_summary
 from discord_ferry.state import MigrationState, load_state, save_state
@@ -377,3 +378,97 @@ async def _run_phases(
             MigrationEvent(phase=phase_name, status="completed", message=f"Completed {phase_name}")
         )
         save_state(state, config.output_dir)
+
+
+async def run_retry_failed(
+    config: FerryConfig,
+    state: MigrationState,
+    exports: list[DCEExport],
+    on_event: EventCallback,
+) -> None:
+    """Re-process failed messages from state.failed_messages.
+
+    Uses a single-scan strategy: collects all failed message IDs, then
+    scans exports once to find matching DCEMessage objects.
+    """
+    if not state.failed_messages:
+        on_event(
+            MigrationEvent(
+                phase="retry", status="completed", message="No failed messages to retry."
+            )
+        )
+        return
+
+    if not config.export_dir.exists():
+        on_event(
+            MigrationEvent(
+                phase="retry",
+                status="error",
+                message=f"Cannot retry: export directory not found at {config.export_dir}",
+            )
+        )
+        return
+
+    # Collect failed IDs for single-scan lookup
+    failed_ids = {fm.discord_msg_id for fm in state.failed_messages}
+
+    on_event(
+        MigrationEvent(
+            phase="retry",
+            status="started",
+            message=f"Retrying {len(failed_ids)} failed messages",
+        )
+    )
+
+    # Scan all exports once, collect matching messages
+    found_messages: dict[str, DCEMessage] = {}
+    for export in exports:
+        msg_iter = (
+            stream_messages(export.json_path)
+            if export.json_path is not None
+            else iter(export.messages)
+        )
+        for msg in msg_iter:
+            if msg.id in failed_ids:
+                found_messages[msg.id] = msg
+
+    async with get_session(config) as session:
+        config.session = session
+        retried = 0
+        for fm in list(state.failed_messages):  # Copy list — we modify during iteration
+            found_msg = found_messages.get(fm.discord_msg_id)
+            if found_msg is None:
+                on_event(
+                    MigrationEvent(
+                        phase="retry",
+                        status="warning",
+                        message=f"Message {fm.discord_msg_id} not found in exports — skipping.",
+                    )
+                )
+                continue
+
+            stoat_channel_id = fm.stoat_channel_id
+            try:
+                await _process_message(
+                    msg=found_msg,
+                    stoat_channel_id=stoat_channel_id,
+                    config=config,
+                    state=state,
+                    session=session,
+                    on_event=on_event,
+                )
+                state.failed_messages.remove(fm)
+                retried += 1
+            except Exception:  # noqa: BLE001
+                fm.retry_count += 1
+    config.session = None
+
+    save_state(state, config.output_dir)
+    remaining = len(state.failed_messages)
+    on_event(
+        MigrationEvent(
+            phase="retry",
+            status="completed",
+            message=f"Retry complete: {retried} succeeded, {remaining} still failed.",
+        )
+    )

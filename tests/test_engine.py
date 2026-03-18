@@ -1,13 +1,18 @@
 """Tests for the migration engine orchestrator."""
 
+import json
 from pathlib import Path
+from typing import Any
+from unittest.mock import patch
 
 import pytest
+from aioresponses import aioresponses
 
 from discord_ferry.config import FerryConfig
-from discord_ferry.core.engine import PHASE_ORDER, PhaseFunction, run_migration
+from discord_ferry.core.engine import PHASE_ORDER, PhaseFunction, run_migration, run_retry_failed
 from discord_ferry.core.events import EventCallback, MigrationEvent
-from discord_ferry.state import MigrationState
+from discord_ferry.parser.models import DCEExport
+from discord_ferry.state import FailedMessage, MigrationState
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
@@ -588,3 +593,253 @@ async def test_discord_metadata_fetch_runs_with_skip_export(tmp_path: Path) -> N
     export_events = [e for e in events if e.phase == "export"]
     assert any(e.status == "skipped" for e in export_events)
     assert any("metadata" in e.message.lower() for e in export_events if e.status == "progress")
+
+
+# ---------------------------------------------------------------------------
+# run_retry_failed
+# ---------------------------------------------------------------------------
+
+BASE_URL = "https://stoat.test"
+AUTUMN_URL = "https://autumn.test"
+TOKEN = "test-token"
+
+
+def _make_retry_config(tmp_path: Path, **overrides: Any) -> FerryConfig:
+    """Config suitable for retry tests (no export skip, rate limits off)."""
+    export_dir = tmp_path / "exports"
+    export_dir.mkdir(exist_ok=True)
+    defaults: dict[str, Any] = {
+        "export_dir": export_dir,
+        "stoat_url": BASE_URL,
+        "token": TOKEN,
+        "output_dir": tmp_path / "output",
+        "message_rate_limit": 0.0,
+        "upload_delay": 0.0,
+    }
+    defaults.update(overrides)
+    return FerryConfig(**defaults)
+
+
+def _write_dce_json(export_dir: Path, channel_id: str, messages: list[dict[str, Any]]) -> Path:
+    """Write a minimal valid DCE JSON file and return its path."""
+    data = {
+        "guild": {"id": "guild1", "name": "Test Guild", "iconUrl": ""},
+        "channel": {
+            "id": channel_id,
+            "type": 0,
+            "name": f"channel-{channel_id}",
+            "categoryId": "",
+            "category": "",
+            "topic": "",
+        },
+        "dateRange": {"after": None, "before": None},
+        "exportedAt": "2024-01-01T00:00:00+00:00",
+        "messageCount": len(messages),
+        "messages": messages,
+    }
+    path = export_dir / f"Test - channel-{channel_id} [{channel_id}].json"
+    path.write_text(json.dumps(data), encoding="utf-8")
+    return path
+
+
+def _dce_msg_dict(msg_id: str, content: str = "hello") -> dict[str, Any]:
+    """Build a minimal DCE message JSON dict."""
+    return {
+        "id": msg_id,
+        "type": "Default",
+        "timestamp": "2024-01-15T12:00:00+00:00",
+        "timestampEdited": None,
+        "callEndedTimestamp": None,
+        "isPinned": False,
+        "content": content,
+        "author": {
+            "id": "auth1",
+            "name": "alice",
+            "discriminator": "0000",
+            "nickname": "Alice",
+            "color": None,
+            "isBot": False,
+            "roles": [],
+            "avatarUrl": "",
+        },
+        "attachments": [],
+        "embeds": [],
+        "stickers": [],
+        "reactions": [],
+        "mentions": [],
+    }
+
+
+def _make_exports_from_dir(export_dir: Path) -> list[DCEExport]:
+    """Parse all JSON files in export_dir into DCEExport objects with json_path set."""
+    from discord_ferry.parser.dce_parser import parse_export_directory
+
+    return parse_export_directory(export_dir, metadata_only=True)
+
+
+async def test_retry_failed_empty_list(tmp_path: Path) -> None:
+    """Empty failed_messages completes immediately."""
+    config = _make_retry_config(tmp_path)
+    state = MigrationState()
+    events: list[MigrationEvent] = []
+    await run_retry_failed(config, state, [], events.append)
+    assert any("No failed messages" in e.message for e in events)
+    assert any(e.status == "completed" for e in events)
+
+
+async def test_retry_failed_missing_export_dir(tmp_path: Path) -> None:
+    """Missing export directory aborts with error event."""
+    config = _make_retry_config(tmp_path, export_dir=tmp_path / "nonexistent")
+    state = MigrationState(
+        failed_messages=[FailedMessage(discord_msg_id="m1", stoat_channel_id="ch1", error="fail")]
+    )
+    events: list[MigrationEvent] = []
+    await run_retry_failed(config, state, [], events.append)
+    assert any("export directory not found" in e.message for e in events)
+    assert len(state.failed_messages) == 1  # Unchanged
+
+
+async def test_retry_failed_success_removes_from_list(tmp_path: Path) -> None:
+    """Successfully retried message is removed from failed_messages."""
+    config = _make_retry_config(tmp_path)
+    config.output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Write a DCE export with the message we want to retry
+    _write_dce_json(config.export_dir, "ch1", [_dce_msg_dict("msg_retry", "retry me")])
+
+    exports = _make_exports_from_dir(config.export_dir)
+
+    state = MigrationState(
+        channel_map={"ch1": "stoat_ch1"},
+        autumn_url=AUTUMN_URL,
+        failed_messages=[
+            FailedMessage(discord_msg_id="msg_retry", stoat_channel_id="stoat_ch1", error="timeout")
+        ],
+    )
+
+    events: list[MigrationEvent] = []
+    with aioresponses() as m:
+        m.post(
+            f"{BASE_URL}/channels/stoat_ch1/messages",
+            payload={"_id": "stoat_retried"},
+        )
+        await run_retry_failed(config, state, exports, events.append)
+
+    assert len(state.failed_messages) == 0
+    assert "msg_retry" in state.message_map
+    assert any("1 succeeded" in e.message for e in events)
+
+
+async def test_retry_failed_still_failing_increments_count(tmp_path: Path) -> None:
+    """A message that fails again increments retry_count and stays in the list."""
+    config = _make_retry_config(tmp_path)
+    config.output_dir.mkdir(parents=True, exist_ok=True)
+
+    _write_dce_json(config.export_dir, "ch1", [_dce_msg_dict("msg_fail")])
+    exports = _make_exports_from_dir(config.export_dir)
+
+    state = MigrationState(
+        channel_map={"ch1": "stoat_ch1"},
+        autumn_url=AUTUMN_URL,
+        failed_messages=[
+            FailedMessage(discord_msg_id="msg_fail", stoat_channel_id="stoat_ch1", error="err")
+        ],
+    )
+
+    events: list[MigrationEvent] = []
+
+    async def always_fail(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        raise RuntimeError("still broken")
+
+    with patch("discord_ferry.core.engine._process_message", side_effect=always_fail):
+        await run_retry_failed(config, state, exports, events.append)
+
+    assert len(state.failed_messages) == 1
+    assert state.failed_messages[0].retry_count == 1
+    assert any("0 succeeded" in e.message and "1 still failed" in e.message for e in events)
+
+
+async def test_retry_failed_message_not_found_in_exports(tmp_path: Path) -> None:
+    """A message ID not found in any export emits a warning and is not removed."""
+    config = _make_retry_config(tmp_path)
+    config.output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Write an export with a DIFFERENT message ID
+    _write_dce_json(config.export_dir, "ch1", [_dce_msg_dict("other_msg")])
+    exports = _make_exports_from_dir(config.export_dir)
+
+    state = MigrationState(
+        channel_map={"ch1": "stoat_ch1"},
+        autumn_url=AUTUMN_URL,
+        failed_messages=[
+            FailedMessage(
+                discord_msg_id="missing_msg", stoat_channel_id="stoat_ch1", error="timeout"
+            )
+        ],
+    )
+
+    events: list[MigrationEvent] = []
+    with aioresponses():
+        await run_retry_failed(config, state, exports, events.append)
+
+    assert len(state.failed_messages) == 1  # Not removed
+    assert any("not found in exports" in e.message for e in events)
+
+
+async def test_retry_failed_saves_state(tmp_path: Path) -> None:
+    """State is saved after retry completes."""
+    config = _make_retry_config(tmp_path)
+    config.output_dir.mkdir(parents=True, exist_ok=True)
+
+    _write_dce_json(config.export_dir, "ch1", [_dce_msg_dict("msg_save")])
+    exports = _make_exports_from_dir(config.export_dir)
+
+    state = MigrationState(
+        channel_map={"ch1": "stoat_ch1"},
+        autumn_url=AUTUMN_URL,
+        failed_messages=[
+            FailedMessage(discord_msg_id="msg_save", stoat_channel_id="stoat_ch1", error="err")
+        ],
+    )
+
+    events: list[MigrationEvent] = []
+    with aioresponses() as m:
+        m.post(
+            f"{BASE_URL}/channels/stoat_ch1/messages",
+            payload={"_id": "stoat_saved"},
+        )
+        await run_retry_failed(config, state, exports, events.append)
+
+    assert (config.output_dir / "state.json").exists()
+
+
+async def test_retry_failed_mixed_results(tmp_path: Path) -> None:
+    """Retry with one success and one not-found gives correct counts."""
+    config = _make_retry_config(tmp_path)
+    config.output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Only msg_ok exists in the export
+    _write_dce_json(config.export_dir, "ch1", [_dce_msg_dict("msg_ok")])
+    exports = _make_exports_from_dir(config.export_dir)
+
+    state = MigrationState(
+        channel_map={"ch1": "stoat_ch1"},
+        autumn_url=AUTUMN_URL,
+        failed_messages=[
+            FailedMessage(discord_msg_id="msg_ok", stoat_channel_id="stoat_ch1", error="e"),
+            FailedMessage(discord_msg_id="msg_gone", stoat_channel_id="stoat_ch1", error="e"),
+        ],
+    )
+
+    events: list[MigrationEvent] = []
+    with aioresponses() as m:
+        m.post(
+            f"{BASE_URL}/channels/stoat_ch1/messages",
+            payload={"_id": "stoat_ok"},
+        )
+        await run_retry_failed(config, state, exports, events.append)
+
+    # msg_ok succeeded → removed; msg_gone not found → still in list
+    assert len(state.failed_messages) == 1
+    assert state.failed_messages[0].discord_msg_id == "msg_gone"
+    assert any("1 succeeded" in e.message and "1 still failed" in e.message for e in events)
