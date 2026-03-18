@@ -20,7 +20,7 @@ from discord_ferry.parser.transforms import (
     strip_underline,
 )
 from discord_ferry.state import save_state
-from discord_ferry.uploader.autumn import upload_with_cache
+from discord_ferry.uploader.autumn import TAG_SIZE_LIMITS, upload_with_cache
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -48,6 +48,18 @@ _SKIP_TYPES = frozenset(
 
 # Emit a progress event every this many messages.
 _PROGRESS_EVERY = 50
+
+
+def _skip_attachment(
+    state: MigrationState,
+    filename: str,
+    reason: str,
+    phase: str = "messages",
+) -> str:
+    """Record a skipped attachment and return placeholder text."""
+    state.attachments_skipped += 1
+    state.warnings.append({"phase": phase, "type": "attachment_skipped", "message": reason})
+    return f"[{reason}]"
 
 
 # ---------------------------------------------------------------------------
@@ -546,6 +558,24 @@ async def _upload_attachments(
     """
     autumn_ids: list[str] = []
     for att in msg.attachments[:5]:
+        # Pre-check: skip oversized files before any network call.
+        limit = TAG_SIZE_LIMITS.get("attachments", 0)
+        if att.file_size_bytes > 0 and limit > 0 and att.file_size_bytes > limit:
+            reason = (
+                f"File too large: {att.file_name} "
+                f"({att.file_size_bytes / 1_048_576:.1f} MB, "
+                f"limit: {limit / 1_048_576:.1f} MB)"
+            )
+            _skip_attachment(state, att.file_name, reason)
+            on_event(
+                MigrationEvent(
+                    phase="messages",
+                    status="warning",
+                    message=f"Attachment {att.file_name!r} too large — skipped.",
+                )
+            )
+            continue
+
         local_path = _resolve_attachment_path(config.export_dir, att.url)
         if local_path is None or not local_path.exists():
             state.attachments_skipped += 1

@@ -14,6 +14,8 @@ from discord_ferry.migrator.messages import (
     _build_content,
     _build_masquerade,
     _resolve_attachment_path,
+    _skip_attachment,
+    _upload_attachments,
     run_messages,
 )
 from discord_ferry.parser.models import (
@@ -1300,3 +1302,118 @@ async def test_poll_in_build_content(tmp_path: Path, mock_aiohttp: aioresponses)
     # At least one sent message should contain poll text
     poll_found = any("What do you prefer?" in str(b.get("content", "")) for b in captured_bodies)
     assert poll_found, f"Poll text not found in sent messages: {captured_bodies}"
+
+
+# ---------------------------------------------------------------------------
+# _skip_attachment helper
+# ---------------------------------------------------------------------------
+
+
+def test_skip_attachment_returns_placeholder() -> None:
+    """_skip_attachment returns a bracketed placeholder with the reason."""
+    state = _make_state()
+    reason = "File too large: photo.png (25.0 MB, limit: 20.0 MB)"
+    result = _skip_attachment(state, "photo.png", reason)
+    assert result == f"[{reason}]"
+    assert state.attachments_skipped == 1
+    assert len(state.warnings) == 1
+    assert state.warnings[0]["type"] == "attachment_skipped"
+
+
+def test_skip_attachment_increments_on_multiple_calls() -> None:
+    """Counter increments correctly across multiple calls."""
+    state = _make_state()
+    _skip_attachment(state, "a.png", "reason a")
+    _skip_attachment(state, "b.png", "reason b")
+    _skip_attachment(state, "c.png", "reason c")
+    assert state.attachments_skipped == 3
+    assert len(state.warnings) == 3
+
+
+# ---------------------------------------------------------------------------
+# Size pre-check in _upload_attachments
+# ---------------------------------------------------------------------------
+
+
+async def test_oversized_attachment_skipped_before_upload(
+    tmp_path: Path, mock_aiohttp: aioresponses
+) -> None:
+    """Attachment exceeding 20 MB limit is skipped with no HTTP call."""
+    state = _make_state()
+    config = _make_config(tmp_path)
+    events: list[MigrationEvent] = []
+
+    oversized = DCEAttachment(
+        id="att1",
+        url="huge.bin",
+        file_name="huge.bin",
+        file_size_bytes=25 * 1024 * 1024,  # 25 MB — over 20 MB limit
+    )
+    msg = _make_message(id="msg1", content="with attachment", attachments=[oversized])
+
+    async with aiohttp.ClientSession() as session:
+        result = await _upload_attachments(msg, config, state, session, _collect_events(events))
+
+    assert result == []
+    assert state.attachments_skipped == 1
+    assert any(w["type"] == "attachment_skipped" for w in state.warnings)
+    warning_events = [e for e in events if e.status == "warning"]
+    assert any("too large" in e.message for e in warning_events)
+
+
+async def test_file_size_zero_falls_through_to_upload(
+    tmp_path: Path, mock_aiohttp: aioresponses
+) -> None:
+    """file_size_bytes=0 (unknown size) falls through to normal upload path."""
+    att_file = tmp_path / "unknown_size.png"
+    att_file.write_bytes(b"data")
+
+    mock_aiohttp.post(f"{AUTUMN_URL}/attachments", payload={"id": "autumn_id"})
+
+    state = _make_state()
+    config = _make_config(tmp_path)
+    events: list[MigrationEvent] = []
+
+    att = DCEAttachment(
+        id="att1",
+        url="unknown_size.png",
+        file_name="unknown_size.png",
+        file_size_bytes=0,
+    )
+    msg = _make_message(id="msg1", content="with file", attachments=[att])
+
+    async with aiohttp.ClientSession() as session:
+        result = await _upload_attachments(msg, config, state, session, _collect_events(events))
+
+    assert len(result) == 1
+    assert state.attachments_uploaded == 1
+    assert state.attachments_skipped == 0
+
+
+async def test_attachment_exactly_at_limit_proceeds(
+    tmp_path: Path, mock_aiohttp: aioresponses
+) -> None:
+    """Attachment exactly at 20 MB limit proceeds to upload (> not >=)."""
+    att_file = tmp_path / "exact.bin"
+    att_file.write_bytes(b"data")
+
+    mock_aiohttp.post(f"{AUTUMN_URL}/attachments", payload={"id": "autumn_exact"})
+
+    state = _make_state()
+    config = _make_config(tmp_path)
+    events: list[MigrationEvent] = []
+
+    att = DCEAttachment(
+        id="att1",
+        url="exact.bin",
+        file_name="exact.bin",
+        file_size_bytes=20 * 1024 * 1024,  # Exactly at limit
+    )
+    msg = _make_message(id="msg1", content="exact limit", attachments=[att])
+
+    async with aiohttp.ClientSession() as session:
+        result = await _upload_attachments(msg, config, state, session, _collect_events(events))
+
+    assert len(result) == 1
+    assert state.attachments_uploaded == 1
+    assert state.attachments_skipped == 0
