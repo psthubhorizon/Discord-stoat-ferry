@@ -1894,3 +1894,113 @@ def test_empty_content_with_edit_timestamp() -> None:
     )
     result = _build_content(msg, state)
     assert "*(edited)*" in result
+
+
+# ---------------------------------------------------------------------------
+# S4: Attachment overflow handling
+# ---------------------------------------------------------------------------
+
+
+async def test_five_attachments_no_overflow(tmp_path: Path, mock_aiohttp: aioresponses) -> None:
+    """5 attachments produce no overflow warning and no overflow text in content."""
+    for i in range(5):
+        f = tmp_path / f"file{i}.png"
+        f.write_bytes(b"x" * 10)
+        mock_aiohttp.post(f"{AUTUMN_URL}/attachments", payload={"id": f"att_id_{i}"})
+
+    mock_aiohttp.post(CHANNEL_MSG_URL, payload={"_id": "stoat_msg"})
+
+    state = _make_state()
+    config = _make_config(tmp_path)
+    attachments = [
+        DCEAttachment(id=str(i), url=f"file{i}.png", file_name=f"file{i}.png") for i in range(5)
+    ]
+    msg = _make_message(id="msg1", content="five files", attachments=attachments)
+    export = _make_export(messages=[msg])
+
+    sent_kwargs: list[dict[str, Any]] = []
+
+    async def capture_send(
+        session: Any, stoat_url: Any, token: Any, channel_id: Any, **kwargs: Any
+    ) -> dict[str, Any]:
+        sent_kwargs.append(kwargs)
+        return {"_id": "stoat_msg"}
+
+    with patch("discord_ferry.migrator.messages.api_send_message", capture_send):
+        await run_messages(config, state, [export], lambda e: None)
+
+    assert "msg1" in state.message_map
+    assert state.attachments_skipped == 0
+    assert "[+" not in sent_kwargs[0]["content"]
+    assert not any(w.get("type") == "attachment_overflow" for w in state.warnings)
+
+
+async def test_seven_attachments_overflow_text(tmp_path: Path, mock_aiohttp: aioresponses) -> None:
+    """7 attachments: first 5 uploaded, content includes overflow text, state updated."""
+    for i in range(5):
+        f = tmp_path / f"file{i}.png"
+        f.write_bytes(b"x" * 10)
+        mock_aiohttp.post(f"{AUTUMN_URL}/attachments", payload={"id": f"att_id_{i}"})
+
+    mock_aiohttp.post(CHANNEL_MSG_URL, payload={"_id": "stoat_msg"})
+
+    state = _make_state()
+    config = _make_config(tmp_path)
+    attachments = [
+        DCEAttachment(id=str(i), url=f"file{i}.png", file_name=f"file{i}.png") for i in range(7)
+    ]
+    msg = _make_message(id="msg1", content="many files", attachments=attachments)
+    export = _make_export(messages=[msg])
+
+    sent_kwargs: list[dict[str, Any]] = []
+
+    async def capture_send(
+        session: Any, stoat_url: Any, token: Any, channel_id: Any, **kwargs: Any
+    ) -> dict[str, Any]:
+        sent_kwargs.append(kwargs)
+        return {"_id": "stoat_msg"}
+
+    with patch("discord_ferry.migrator.messages.api_send_message", capture_send):
+        await run_messages(config, state, [export], lambda e: None)
+
+    assert "msg1" in state.message_map
+    content = sent_kwargs[0]["content"]
+    assert "[+2 more attachment(s)" in content
+    assert "file5.png" in content
+    assert "file6.png" in content
+    assert state.attachments_skipped == 2
+    assert any(w.get("type") == "attachment_overflow" for w in state.warnings)
+
+
+async def test_ten_attachments_overflow(tmp_path: Path, mock_aiohttp: aioresponses) -> None:
+    """10 attachments: 5 in overflow text."""
+    for i in range(5):
+        f = tmp_path / f"file{i}.png"
+        f.write_bytes(b"x" * 10)
+        mock_aiohttp.post(f"{AUTUMN_URL}/attachments", payload={"id": f"att_id_{i}"})
+
+    mock_aiohttp.post(CHANNEL_MSG_URL, payload={"_id": "stoat_msg"})
+
+    state = _make_state()
+    config = _make_config(tmp_path)
+    attachments = [
+        DCEAttachment(id=str(i), url=f"file{i}.png", file_name=f"file{i}.png") for i in range(10)
+    ]
+    msg = _make_message(id="msg1", content="lots of files", attachments=attachments)
+    export = _make_export(messages=[msg])
+
+    sent_kwargs: list[dict[str, Any]] = []
+
+    async def capture_send(
+        session: Any, stoat_url: Any, token: Any, channel_id: Any, **kwargs: Any
+    ) -> dict[str, Any]:
+        sent_kwargs.append(kwargs)
+        return {"_id": "stoat_msg"}
+
+    with patch("discord_ferry.migrator.messages.api_send_message", capture_send):
+        await run_messages(config, state, [export], lambda e: None)
+
+    assert "msg1" in state.message_map
+    content = sent_kwargs[0]["content"]
+    assert "[+5 more attachment(s)" in content
+    assert state.attachments_skipped == 5

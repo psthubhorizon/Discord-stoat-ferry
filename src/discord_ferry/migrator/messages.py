@@ -396,6 +396,26 @@ async def _process_message(
         )
         return
 
+    # Step 0b: Detect attachment overflow (Stoat limit: 5 per message).
+    overflow_text = ""
+    if len(msg.attachments) > 5:
+        overflow = msg.attachments[5:]
+        overflow_names = ", ".join(att.file_name for att in overflow)
+        overflow_text = (
+            f"\n[+{len(overflow)} more attachment(s) not migrated "
+            f"(Stoat limit: 5): {overflow_names}]"
+        )
+        state.attachments_skipped += len(overflow)
+        state.warnings.append(
+            {
+                "phase": "messages",
+                "type": "attachment_overflow",
+                "message": (
+                    f"Message {msg.id}: {len(overflow)} attachments exceed Stoat limit of 5"
+                ),
+            }
+        )
+
     # Step 1: Upload attachments (max 5).
     autumn_ids, attachment_placeholders = await _upload_attachments(
         msg, config, state, session, on_event
@@ -485,6 +505,10 @@ async def _process_message(
         remaining = 2000 - len(content)
         reaction_text = _build_reaction_text(msg.reactions, remaining)
         content += reaction_text
+
+    # Step 6c: Append overflow text for attachments beyond the 5-file limit.
+    if overflow_text:
+        content += overflow_text
 
     # Step 7: Truncate to 2000 characters.
     if len(content) > 2000:
