@@ -495,6 +495,9 @@ async def run_retry_failed(
         )
         return
 
+    # Ensure request semaphore is initialized (may be called standalone, not from run_migration).
+    init_request_semaphore(config.max_concurrent_requests)
+
     if not config.export_dir.exists():
         on_event(
             MigrationEvent(

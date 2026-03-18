@@ -503,6 +503,8 @@ async def _process_message(
         config.reaction_mode if config.reaction_mode in _VALID_REACTION_MODES else "text"
     )
     if msg.reactions and _effective_mode == "text":
+        # Budget is best-effort — overflow text may be appended after this.
+        # Step 7 truncation (2000 chars) is the true safety net.
         remaining = 2000 - len(content)
         reaction_text = _build_reaction_text(msg.reactions, remaining)
         content += reaction_text
