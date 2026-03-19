@@ -625,17 +625,15 @@ async def test_empty_message_gets_placeholder(tmp_path: Path, mock_aiohttp: aior
 # ---------------------------------------------------------------------------
 
 
-async def test_content_truncated_at_2000_chars(tmp_path: Path, mock_aiohttp: aioresponses) -> None:
-    """Content exceeding 2000 characters is truncated to 1997 + '...'."""
-    mock_aiohttp.post(CHANNEL_MSG_URL, payload={"_id": "stoat_msg"})
-
+async def test_content_split_at_2001_chars(tmp_path: Path) -> None:
+    """Content exceeding 2000 characters is split into multiple parts (not truncated)."""
     state = _make_state()
     config = _make_config(tmp_path)
     long_content = "A" * 3000
     msg = _make_message(id="msg1", content=long_content)
     export = _make_export(messages=[msg])
 
-    # Capture the actual payload sent.
+    # Capture all payloads sent.
     sent_content: list[str] = []
 
     async def capture_send(
@@ -647,9 +645,13 @@ async def test_content_truncated_at_2000_chars(tmp_path: Path, mock_aiohttp: aio
     with patch("discord_ferry.migrator.messages.api_send_message", capture_send):
         await run_messages(config, state, [export], lambda e: None)
 
-    assert len(sent_content) == 1
-    assert len(sent_content[0]) <= 2000
-    assert sent_content[0].endswith("...")
+    # Content is split into multiple parts, all ≤2000 chars.
+    assert len(sent_content) >= 2
+    for part in sent_content:
+        assert len(part) <= 2000
+    # First part should have continuation marker, not "..."
+    assert "continued" in sent_content[0]
+    assert not sent_content[0].endswith("...")
 
 
 # ---------------------------------------------------------------------------
@@ -2024,3 +2026,37 @@ def test_discord_links_rewritten_in_content() -> None:
     assert "[Discord invite — no longer valid]" in result
     # Original Discord URL should not remain for the mapped link
     assert "discord.com/channels/111/456/789" not in result
+
+
+# ---------------------------------------------------------------------------
+# S3: Embed overflow reporting
+# ---------------------------------------------------------------------------
+
+
+async def test_embed_overflow_fallback_text(tmp_path: Path) -> None:
+    """When embeds can't be migrated (no title/description), content gets a [N embed(s)...] note."""
+    state = _make_state()
+    config = _make_config(tmp_path)
+
+    sent_content: list[str] = []
+
+    async def capture_send(
+        session: Any, stoat_url: Any, token: Any, channel_id: Any, **kwargs: Any
+    ) -> dict[str, Any]:
+        sent_content.append(kwargs.get("content", ""))
+        return {"_id": "stoat_msg"}
+
+    # Create embeds with no title or description — flatten_embed returns empty dicts,
+    # so none pass the `flat.get("description") or flat.get("title")` guard.
+    bad_embeds = [{"color": 0xFF0000} for _ in range(3)]
+    msg = _make_message(id="msg1", content="check", embeds=bad_embeds)
+    export = _make_export(messages=[msg])
+
+    with patch("discord_ferry.migrator.messages.api_send_message", capture_send):
+        await run_messages(config, state, [export], lambda e: None)
+
+    assert len(sent_content) >= 1
+    combined = " ".join(sent_content)
+    assert "embed(s) could not be migrated" in combined, (
+        f"Expected embed overflow notice in content, got: {combined!r}"
+    )
