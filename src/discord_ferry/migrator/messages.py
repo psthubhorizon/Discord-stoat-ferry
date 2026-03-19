@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from discord_ferry.core.events import MigrationEvent
-from discord_ferry.migrator.api import api_send_message, get_session
+from discord_ferry.migrator.api import api_send_message, get_rate_multiplier, get_session
 from discord_ferry.migrator.sanitize import truncate_name
 from discord_ferry.parser.dce_parser import check_cdn_url_expiry, stream_messages
 from discord_ferry.parser.transforms import (
@@ -851,12 +851,17 @@ async def _process_message(
 
 
 async def _rate_limit_with_pause(config: FerryConfig) -> None:
-    """Sleep for rate limit, respecting pause/cancel flags from the GUI."""
+    """Sleep for rate limit, respecting pause/cancel flags from the GUI.
+
+    The base delay is scaled by the adaptive rate multiplier from :mod:`api`
+    so that sustained 429 pressure automatically slows message sending.
+    """
     if config.cancel_event and config.cancel_event.is_set():
         raise asyncio.CancelledError("Migration cancelled by user")
     if config.pause_event:
         await config.pause_event.wait()  # blocks while event is cleared (paused)
-    await asyncio.sleep(config.message_rate_limit)
+    delay = config.message_rate_limit * get_rate_multiplier()
+    await asyncio.sleep(delay)
 
 
 def _resolve_attachment_path(export_dir: Path, url: str) -> Path | None:
@@ -1075,7 +1080,7 @@ async def _build_masquerade(
     Returns:
         Masquerade dict with ``name``, ``avatar`` (URL or None), and ``colour`` (or None).
     """
-    name = truncate_name(author.nickname or author.name)
+    name = truncate_name(author.nickname or author.name, author_id=author.id)
     avatar_url: str | None = None
 
     if author.id in state.avatar_cache:
