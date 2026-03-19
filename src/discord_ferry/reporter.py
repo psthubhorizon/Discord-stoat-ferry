@@ -56,9 +56,7 @@ def compute_fidelity_score(
     """
     msg_ratio = (total_messages - failed_count) / max(total_messages, 1)
     att_ratio = attachments_uploaded / max(attachments_uploaded + attachments_skipped, 1)
-    embed_ratio = (
-        (embeds_total - embeds_dropped) / embeds_total if embeds_total else 1.0
-    )
+    embed_ratio = (embeds_total - embeds_dropped) / embeds_total if embeds_total else 1.0
     reply_ratio = replies_linked / replies_total if replies_total else 1.0
     reaction_ratio = reactions_applied / max(reactions_total, 1) if reactions_total else 1.0
     overall = (

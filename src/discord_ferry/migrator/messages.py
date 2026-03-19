@@ -45,6 +45,7 @@ def _safe_error(config: FerryConfig, text: str) -> str:
         return config.token_store.sanitize(text)
     return text
 
+
 logger = logging.getLogger(__name__)
 
 _VALID_REACTION_MODES = frozenset({"text", "native", "skip"})
