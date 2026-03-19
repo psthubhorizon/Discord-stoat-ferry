@@ -49,6 +49,13 @@ class FerryConfig:
     # Skip the export phase (auto-set when export_dir is user-provided in offline mode)
     skip_export: bool = False
 
+    # Skip SHA-256 verification of DCE binary downloads
+    skip_dce_verify: bool = False
+
+    # Post-upload verification: compare returned file metadata against local size.
+    # Best-effort — not all Autumn responses include a size field.
+    verify_uploads: bool = False
+
     # Runtime-only fields (not serialized)
     pause_event: asyncio.Event | None = field(default=None, repr=False)
     cancel_event: asyncio.Event | None = field(default=None, repr=False)

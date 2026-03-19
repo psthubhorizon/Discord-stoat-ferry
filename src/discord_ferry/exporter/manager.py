@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import io
+import json as _json
 import logging
 import platform
 import subprocess
@@ -37,6 +39,49 @@ _GITHUB_RELEASE_URL = (
 )
 
 _MAX_DCE_BYTES = 150 * 1024 * 1024  # 150 MB hard ceiling
+
+
+def _get_platform_key() -> str | None:
+    """Return the checksums-file platform key for the current platform, or None if unsupported."""
+    system = platform.system()
+    machine = platform.machine()
+    return _PLATFORM_MAP.get((system, machine))
+
+
+def _verify_dce_checksum(zip_data: bytes, version: str, platform_key: str) -> None:
+    """Verify DCE binary SHA-256 hash against pinned checksums.
+
+    Silently skips if no checksums file is present or no hash is pinned for
+    the given version/platform combination.
+
+    Args:
+        zip_data: Raw bytes of the downloaded zip archive.
+        version: DCE release version string (e.g. "2.46.1").
+        platform_key: Platform identifier matching the checksums file key
+            (e.g. "win-x64", "linux-x64", "osx-x64").
+
+    Raises:
+        DCENotFoundError: If the computed hash does not match the pinned hash.
+    """
+    try:
+        import importlib.resources as pkg_resources
+
+        checksums_ref = pkg_resources.files("discord_ferry").joinpath("dce_checksums.json")
+        checksums_text = checksums_ref.read_text(encoding="utf-8")
+    except (FileNotFoundError, ModuleNotFoundError):
+        return  # No checksums file — skip verification
+
+    checksums = _json.loads(checksums_text)
+    expected = checksums.get(version, {}).get(platform_key, "")
+    if not expected:
+        return  # No hash pinned for this version/platform — skip
+
+    sha256 = hashlib.sha256(zip_data).hexdigest()
+    if sha256 != expected:
+        raise DCENotFoundError(
+            f"DCE binary hash mismatch (expected {expected[:12]}..., got {sha256[:12]}...). "
+            "Possible tampering or corrupt download. Use --skip-dce-verify to bypass."
+        )
 
 
 def _get_dce_dir() -> Path:
@@ -88,17 +133,18 @@ def get_dce_path() -> Path | None:
     return exe if exe.exists() else None
 
 
-async def download_dce(on_event: EventCallback) -> Path:
+async def download_dce(on_event: EventCallback, *, skip_verify: bool = False) -> Path:
     """Download the pinned DCE release from GitHub and extract it.
 
     Args:
         on_event: Callback for progress events.
+        skip_verify: If True, skip SHA-256 hash verification of the download.
 
     Returns:
         Path to the DCE executable.
 
     Raises:
-        DCENotFoundError: If download or extraction fails.
+        DCENotFoundError: If download, verification, or extraction fails.
     """
     from discord_ferry.core.events import MigrationEvent
 
@@ -165,6 +211,11 @@ async def download_dce(on_event: EventCallback) -> Path:
                 raise DCENotFoundError(f"Network error downloading DCE: {e}") from e
 
     assert data is not None  # unreachable — both-fail case raises above
+
+    if not skip_verify:
+        platform_key = _get_platform_key()
+        if platform_key is not None:
+            _verify_dce_checksum(data, DCE_VERSION, platform_key)
 
     dce_dir.mkdir(parents=True, exist_ok=True)
     try:

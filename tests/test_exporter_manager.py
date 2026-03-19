@@ -16,6 +16,7 @@ from discord_ferry.exporter.manager import (
     DCE_VERSION,
     _get_asset_name,
     _get_dce_dir,
+    _verify_dce_checksum,
     check_export_freshness,
     detect_dotnet,
     download_dce,
@@ -277,3 +278,87 @@ class TestCheckExportFreshness:
         """Directory with no JSON files produces no warnings."""
         warnings = check_export_freshness(tmp_path)
         assert warnings == []
+
+
+# ---------------------------------------------------------------------------
+# _verify_dce_checksum
+# ---------------------------------------------------------------------------
+
+
+def _checksums_json(version: str, platform_key: str, sha256: str) -> str:
+    """Build a minimal checksums JSON string for tests."""
+    import json
+
+    return json.dumps({version: {platform_key: sha256}})
+
+
+def _patch_checksums(checksums_json: str):  # type: ignore[return]
+    """Context manager: patch importlib.resources.files to return checksums_json."""
+    mock_files = patch("importlib.resources.files")
+
+    class _Ctx:
+        def __enter__(self) -> None:
+            self._patcher = mock_files.__enter__()
+            mock_ref = self._patcher.return_value.joinpath.return_value
+            mock_ref.read_text.return_value = checksums_json
+
+        def __exit__(self, *args: object) -> None:
+            mock_files.__exit__(*args)
+
+    return patch("importlib.resources.files")
+
+
+class TestVerifyDceChecksum:
+    def test_dce_checksum_verification_passes(self) -> None:
+        """Matching hash produces no error."""
+        import hashlib
+        import json
+
+        zip_data = b"fake-zip-content"
+        expected_hash = hashlib.sha256(zip_data).hexdigest()
+        checksums_json = _checksums_json("2.46.1", "linux-x64", expected_hash)
+
+        with patch("importlib.resources.files") as mock_files:
+            mock_ref = mock_files.return_value.joinpath.return_value
+            mock_ref.read_text.return_value = checksums_json
+            # Should not raise
+            _verify_dce_checksum(zip_data, "2.46.1", "linux-x64")
+
+    def test_dce_checksum_verification_fails(self) -> None:
+        """Mismatched hash raises DCENotFoundError."""
+        from discord_ferry.errors import DCENotFoundError
+
+        zip_data = b"fake-zip-content"
+        wrong_hash = "a" * 64  # clearly wrong
+        checksums_json = _checksums_json("2.46.1", "linux-x64", wrong_hash)
+
+        with patch("importlib.resources.files") as mock_files:
+            mock_ref = mock_files.return_value.joinpath.return_value
+            mock_ref.read_text.return_value = checksums_json
+            with pytest.raises(DCENotFoundError, match="hash mismatch"):
+                _verify_dce_checksum(zip_data, "2.46.1", "linux-x64")
+
+    def test_dce_checksum_empty_hash_skips(self) -> None:
+        """Empty string in checksums skips verification without error."""
+        zip_data = b"fake-zip-content"
+        checksums_json = _checksums_json("2.46.1", "linux-x64", "")
+
+        with patch("importlib.resources.files") as mock_files:
+            mock_ref = mock_files.return_value.joinpath.return_value
+            mock_ref.read_text.return_value = checksums_json
+            # Should not raise — empty hash means skip
+            _verify_dce_checksum(zip_data, "2.46.1", "linux-x64")
+
+    def test_dce_checksum_missing_version_skips(self) -> None:
+        """Version not present in checksums file skips verification without error."""
+        import json
+
+        zip_data = b"fake-zip-content"
+        # Only 2.99.0 is in the file, not 2.46.1
+        checksums_json = json.dumps({"2.99.0": {"linux-x64": "a" * 64}})
+
+        with patch("importlib.resources.files") as mock_files:
+            mock_ref = mock_files.return_value.joinpath.return_value
+            mock_ref.read_text.return_value = checksums_json
+            # Should not raise — version not found means skip
+            _verify_dce_checksum(zip_data, "2.46.1", "linux-x64")

@@ -127,7 +127,7 @@ async def run_migration(
             )
         dce_path = get_dce_path()
         if dce_path is None:
-            dce_path = await download_dce(on_event)
+            dce_path = await download_dce(on_event, skip_verify=config.skip_dce_verify)
         await run_dce_export(config, dce_path, on_event)
         state.export_completed = True
         save_state(state, config.output_dir)
