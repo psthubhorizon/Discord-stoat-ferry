@@ -209,16 +209,8 @@ async def run_messages(
                 continue
 
             # Resume: skip channels that were fully completed in a previous run.
-            # Compare as integers — Snowflake IDs are numeric and string comparison
-            # doesn't preserve numeric order ("9" > "100" as strings).
-            if (
-                config.resume
-                and state.last_completed_channel
-                and int(export.channel.id) < int(state.last_completed_channel)
-            ):
+            if config.resume and export.channel.id in state.completed_channel_ids:
                 continue
-            # The channel whose ID equals last_completed_channel is the one
-            # we partially processed; we will process it but skip already-done messages.
 
             on_event(
                 MigrationEvent(
@@ -268,14 +260,14 @@ async def run_messages(
                 message_source = iter(sorted(export.messages, key=lambda m: m.timestamp))
             total = export.message_count
 
+            _channel_msg_offset = state.channel_message_offsets.get(export.channel.id, "")
             for idx, msg in enumerate(message_source):
-                # Resume: skip messages already processed within the resume channel.
+                # Resume: skip messages already processed within this channel.
                 # Compare as integers — Snowflake IDs are numeric.
                 if (
                     config.resume
-                    and state.last_completed_channel == export.channel.id
-                    and state.last_completed_message
-                    and int(msg.id) <= int(state.last_completed_message)
+                    and _channel_msg_offset
+                    and int(msg.id) <= int(_channel_msg_offset)
                 ):
                     continue
 
@@ -292,6 +284,7 @@ async def run_messages(
                 if (idx + 1) % _checkpoint_interval == 0:
                     now = time.monotonic()
                     if now - _last_save_time >= 5.0:
+                        state.channel_message_offsets[export.channel.id] = msg.id
                         save_state(state, config.output_dir)
                         _last_save_time = now
                     on_event(
@@ -311,8 +304,8 @@ async def run_messages(
                 await _rate_limit_with_pause(config)
 
             # Channel complete — save state for crash recovery.
-            state.last_completed_channel = export.channel.id
-            state.last_completed_message = ""
+            state.completed_channel_ids.add(export.channel.id)
+            state.channel_message_offsets.pop(export.channel.id, None)
             save_state(state, config.output_dir)
 
             on_event(
@@ -585,8 +578,7 @@ async def _process_message(
         )
         return
 
-    # Step 9: Resume checkpoint (updated after successful send).
-    state.last_completed_message = msg.id
+    # Step 9: Resume checkpoint handled in the caller's periodic save loop.
 
 
 # ---------------------------------------------------------------------------

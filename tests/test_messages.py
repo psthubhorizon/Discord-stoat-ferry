@@ -771,14 +771,13 @@ async def test_unicode_emoji_reaction_queued(tmp_path: Path, mock_aiohttp: aiore
 
 
 async def test_resume_skips_completed_channels(tmp_path: Path, mock_aiohttp: aioresponses) -> None:
-    """Channels with IDs before last_completed_channel are skipped on resume."""
-    # Only ch 200 should be processed (100 < 200, so 100 is "done").
+    """Channels in completed_channel_ids are skipped on resume."""
+    # Only ch 200 should be processed (ch 100 is in completed_channel_ids).
     mock_aiohttp.post(f"{BASE_URL}/channels/stoat_ch200/messages", payload={"_id": "stoat_msg2"})
 
     state = _make_state(
         channel_map={"100": "stoat_ch100", "200": "stoat_ch200"},
-        last_completed_channel="100",
-        last_completed_message="",
+        completed_channel_ids={"100"},
     )
     config = _make_config(tmp_path, resume=True)
 
@@ -802,13 +801,12 @@ async def test_resume_skips_completed_channels(tmp_path: Path, mock_aiohttp: aio
 async def test_resume_skips_completed_messages_within_channel(
     tmp_path: Path, mock_aiohttp: aioresponses
 ) -> None:
-    """Messages with ID <= last_completed_message in the resume channel are skipped."""
+    """Messages with ID <= channel_message_offsets entry are skipped on resume."""
     mock_aiohttp.post(f"{BASE_URL}/channels/stoat_ch500/messages", payload={"_id": "stoat_msg2"})
 
     state = _make_state(
         channel_map={"500": "stoat_ch500"},
-        last_completed_channel="500",
-        last_completed_message="1000",
+        channel_message_offsets={"500": "1000"},
     )
     config = _make_config(tmp_path, resume=True)
 
@@ -940,7 +938,7 @@ async def test_run_messages_e2e(tmp_path: Path, mock_aiohttp: aioresponses) -> N
     assert "completed" in statuses
 
     # Channel marked as completed.
-    assert state.last_completed_channel == "ch1"
+    assert "ch1" in state.completed_channel_ids
 
 
 # ---------------------------------------------------------------------------
