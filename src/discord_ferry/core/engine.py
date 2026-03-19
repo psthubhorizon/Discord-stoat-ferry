@@ -114,6 +114,9 @@ async def run_migration(
     """
     config.output_dir.mkdir(parents=True, exist_ok=True)
 
+    if config.resume and config.incremental:
+        raise MigrationError("--resume and --incremental are mutually exclusive.")
+
     # Load or create state
     if config.resume:
         state = load_state(config.output_dir)
@@ -133,6 +136,8 @@ async def run_migration(
             state.emoji_map = dict(prior.emoji_map)
             state.avatar_cache = dict(prior.avatar_cache)
             state.author_names = dict(prior.author_names)
+            state.upload_cache = dict(prior.upload_cache)
+            state.message_map = dict(prior.message_map)
             state.stoat_server_id = prior.stoat_server_id
             state.autumn_url = prior.autumn_url
             # Carry over cumulative counters
