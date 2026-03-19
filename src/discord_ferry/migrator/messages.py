@@ -38,6 +38,13 @@ if TYPE_CHECKING:
 
 _THREAD_STRATEGIES = frozenset({"flatten", "merge", "archive"})
 
+
+def _safe_error(config: FerryConfig, text: str) -> str:
+    """Sanitize an error/warning string, stripping any token values."""
+    if config.token_store is not None:
+        return config.token_store.sanitize(text)
+    return text
+
 logger = logging.getLogger(__name__)
 
 _VALID_REACTION_MODES = frozenset({"text", "native", "skip"})
@@ -1057,18 +1064,19 @@ async def _process_message(
                     )
 
     except Exception as exc:  # noqa: BLE001
+        safe_exc = _safe_error(config, str(exc))
         acc_errors.append(
             {
                 "phase": "messages",
                 "type": "message_send_failed",
-                "message": f"Failed to send msg {msg.id}: {exc}",
+                "message": f"Failed to send msg {msg.id}: {safe_exc}",
             }
         )
         acc_failed.append(
             FailedMessage(
                 discord_msg_id=msg.id,
                 stoat_channel_id=stoat_channel_id,
-                error=str(exc),
+                error=safe_exc,
                 content_preview=content[:50] if content else "",
             )
         )
@@ -1076,7 +1084,7 @@ async def _process_message(
             MigrationEvent(
                 phase="messages",
                 status="warning",
-                message=f"Message {msg.id} failed: {exc}",
+                message=f"Message {msg.id} failed: {safe_exc}",
             )
         )
         return

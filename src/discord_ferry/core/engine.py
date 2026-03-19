@@ -114,6 +114,14 @@ async def run_migration(
     """
     config.output_dir.mkdir(parents=True, exist_ok=True)
 
+    # Create token store for sanitizing error messages at output boundaries.
+    from discord_ferry.core.security import SecureTokenStore
+
+    tokens: dict[str, str] = {"stoat": config.token}
+    if config.discord_token:
+        tokens["discord"] = config.discord_token
+    config.token_store = SecureTokenStore(tokens)
+
     if config.resume and config.incremental:
         raise MigrationError("--resume and --incremental are mutually exclusive.")
 
