@@ -180,6 +180,7 @@ class TestDownloadDceRetry:
                 "discord_ferry.exporter.manager.get_dce_path",
                 return_value=tmp_path / "DiscordChatExporter.Cli",
             ),
+            patch("discord_ferry.exporter.manager._verify_dce_checksum"),
             patch("asyncio.sleep", new_callable=AsyncMock),
         ):
             # First attempt: network error
