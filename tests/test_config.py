@@ -48,3 +48,13 @@ def test_offline_mode_detection():
     )
     assert cfg.skip_export is True
     assert cfg.discord_token is None
+
+
+def test_stoat_token_not_in_repr():
+    """token (Stoat API token) must be excluded from repr (security)."""
+    cfg = FerryConfig(
+        export_dir=Path("/tmp/test"),
+        stoat_url="https://stoat.example",
+        token="super-secret-stoat-token",
+    )
+    assert "super-secret-stoat-token" not in repr(cfg)

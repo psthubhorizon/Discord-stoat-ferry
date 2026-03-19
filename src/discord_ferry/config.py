@@ -18,7 +18,7 @@ class FerryConfig:
 
     export_dir: Path
     stoat_url: str
-    token: str
+    token: str = field(repr=False)
     server_id: str | None = None
     server_name: str | None = None
     dry_run: bool = False
