@@ -677,6 +677,7 @@ async def run_channels(
         for forum_key, forum_name in forum_categories.items():
             stoat_forum_id = _generate_category_id()
             state.category_map[forum_key] = stoat_forum_id
+            state.forum_category_names[forum_key] = forum_name  # S15: track for REPORT rebuild
             on_event(
                 MigrationEvent(
                     phase="channels",
@@ -685,8 +686,9 @@ async def run_channels(
                 )
             )
     elif forum_categories and config.dry_run:
-        for forum_key in forum_categories:
+        for forum_key, forum_name in forum_categories.items():
             state.category_map[forum_key] = f"dry-cat-{forum_key}"
+            state.forum_category_names[forum_key] = forum_name  # S15: track for REPORT rebuild
 
     if config.dry_run:
         for channel, _stoat_type, _unique_name, _discord_cat_id, _is_thread in channels_to_create:
@@ -772,6 +774,8 @@ async def run_channels(
                 forum_channel_info.setdefault(discord_cat_id, []).append(
                     (stoat_channel_id, unique_name, msg_count)
                 )
+                # S15: Track discord channel membership for REPORT phase rebuild.
+                state.forum_channel_members.setdefault(discord_cat_id, []).append(ch.id)
 
             # Apply channel permission overrides from Discord metadata.
             if ch_meta and not config.dry_run:
