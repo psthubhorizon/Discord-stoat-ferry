@@ -269,8 +269,7 @@ def check_export_freshness(export_dir: Path, *, force: bool = False) -> list[str
     age_days = (_time.time() - newest_mtime) / 86400
     if age_days > 30 and not force:
         raise ValidationError(
-            f"DCE export is {age_days:.0f} days old (>30 days). "
-            "Use --force to proceed anyway."
+            f"DCE export is {age_days:.0f} days old (>30 days). Use --force to proceed anyway."
         )
     elif age_days > 7:
         warnings.append(f"DCE export is {age_days:.0f} days old — data may be stale")

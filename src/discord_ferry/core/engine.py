@@ -633,15 +633,11 @@ async def _acquire_migration_lock(
                     "Use --force-unlock to override a stale lock."
                 )
             if age >= _LOCK_EXPIRY_SECONDS:
-                warn_msg = (
-                    f"Overriding expired migration lock (age: {int(age / 3600):.1f}h)"
-                )
+                warn_msg = f"Overriding expired migration lock (age: {int(age / 3600):.1f}h)"
                 state.warnings.append(
                     {"phase": "connect", "type": "lock_expired", "message": warn_msg}
                 )
-                on_event(
-                    MigrationEvent(phase="connect", status="warning", message=warn_msg)
-                )
+                on_event(MigrationEvent(phase="connect", status="warning", message=warn_msg))
             # Remove old lock marker before appending new one.
             description = description[:lock_start] + description[lock_end + 1 :]
             description = description.strip()

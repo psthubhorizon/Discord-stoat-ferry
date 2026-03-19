@@ -181,9 +181,7 @@ async def _api_request_inner(
                         await asyncio.sleep(retry_ms / 1000)
                         # Track 429 frequency and ramp up the rate multiplier.
                         _rate_429_window.append(time.monotonic())
-                        recent = sum(
-                            1 for t in _rate_429_window if time.monotonic() - t < 60
-                        )
+                        recent = sum(1 for t in _rate_429_window if time.monotonic() - t < 60)
                         if recent > 3:
                             _rate_multiplier = min(_rate_multiplier * 1.5, 5.0)
                             logger.info(
