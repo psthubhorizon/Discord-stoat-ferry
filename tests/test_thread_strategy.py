@@ -327,9 +327,7 @@ async def test_archive_mode_no_api_calls(tmp_path: Path) -> None:
 
 async def test_thread_sort_by_message_count(tmp_path: Path) -> None:
     """When truncating, higher-traffic threads survive over lower-traffic ones."""
-    config = _make_config(
-        tmp_path, dry_run=True, thread_strategy="flatten", max_channels=3
-    )
+    config = _make_config(tmp_path, dry_run=True, thread_strategy="flatten", max_channels=3)
     state = MigrationState(stoat_server_id="srv1")
     events: list[MigrationEvent] = []
 
@@ -353,9 +351,7 @@ async def test_thread_sort_by_message_count(tmp_path: Path) -> None:
     # Another parent to fill slots.
     parent2 = _make_export(channel_id="400", channel_name="random")
 
-    await run_channels(
-        config, state, [parent, thread_low, thread_high, parent2], events.append
-    )
+    await run_channels(config, state, [parent, thread_low, thread_high, parent2], events.append)
 
     # max_channels=3, so one thread must be dropped.
     # Main channels (100, 400) survive. High-traffic thread (300) survives.

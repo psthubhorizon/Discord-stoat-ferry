@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from discord_ferry.migrator.messages import _split_message
 
-
 # ---------------------------------------------------------------------------
 # Basic boundary behaviour
 # ---------------------------------------------------------------------------
@@ -34,7 +33,6 @@ def test_split_at_2001() -> None:
 
 def test_split_5000_chars() -> None:
     """5000-char content splits into 3 parts."""
-    content = "w " * 1000  # alternating word+space → 2000 chars per rough chunk
     # Force a definite 3-part split by using a long string with no spaces.
     long = "a" * 5000
     parts = _split_message(long)

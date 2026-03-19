@@ -16,7 +16,6 @@ from discord_ferry.migrator.messages import (
     run_messages,
 )
 from discord_ferry.parser.models import (
-    DCEAttachment,
     DCEAuthor,
     DCEChannel,
     DCEEmoji,
@@ -139,9 +138,7 @@ def mock_aiohttp() -> aioresponses:
 # ---------------------------------------------------------------------------
 
 
-async def test_parallel_channels_all_complete(
-    tmp_path: Path, mock_aiohttp: aioresponses
-) -> None:
+async def test_parallel_channels_all_complete(tmp_path: Path, mock_aiohttp: aioresponses) -> None:
     """3 channels processed in parallel, all messages sent and mapped correctly."""
     # Set up 3 channels with 1 message each.
     channel_ids = ["ch1", "ch2", "ch3"]
@@ -153,7 +150,7 @@ async def test_parallel_channels_all_complete(
             payload={"_id": f"stoat_msg_{stoat_id}"},
         )
 
-    channel_map = dict(zip(channel_ids, stoat_ids))
+    channel_map = dict(zip(channel_ids, stoat_ids, strict=True))
     state = _make_state(channel_map=channel_map)
     config = _make_config(tmp_path, max_concurrent_channels=3)
 
@@ -327,9 +324,7 @@ async def test_error_in_one_channel_others_continue(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-async def test_single_channel_works(
-    tmp_path: Path, mock_aiohttp: aioresponses
-) -> None:
+async def test_single_channel_works(tmp_path: Path, mock_aiohttp: aioresponses) -> None:
     """Single channel backward compatibility — same behavior as before parallelism."""
     mock_aiohttp.post(
         f"{BASE_URL}/channels/stoat_ch1/messages",
@@ -423,9 +418,7 @@ async def test_cancel_event_stops_all_workers(tmp_path: Path) -> None:
             )
             for i in range(10)
         ]
-        exports.append(
-            _make_export(channel_id=ch_id, name=f"channel-{ch_id}", messages=msgs)
-        )
+        exports.append(_make_export(channel_id=ch_id, name=f"channel-{ch_id}", messages=msgs))
 
     with patch("discord_ferry.migrator.messages.api_send_message", counting_send):
         # CancelledError from _rate_limit_with_pause will propagate.

@@ -2,16 +2,15 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
-from typing import Any
-
-import pytest
+from typing import TYPE_CHECKING, Any
 
 from discord_ferry.config import FerryConfig
 from discord_ferry.core.engine import PhaseFunction, run_migration
-from discord_ferry.core.events import EventCallback, MigrationEvent
 from discord_ferry.state import MigrationState, save_state
+
+if TYPE_CHECKING:
+    from discord_ferry.core.events import EventCallback, MigrationEvent
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
@@ -127,7 +126,6 @@ async def test_incremental_no_prior_state_runs_fresh(tmp_path: Path) -> None:
 
 async def test_incremental_skips_old_messages(tmp_path: Path) -> None:
     """Messages with ID <= offset are skipped in incremental mode."""
-    from discord_ferry.migrator.messages import _process_single_channel
 
     # Inject a messages phase that checks offsets are applied
     processed_ids: list[str] = []
